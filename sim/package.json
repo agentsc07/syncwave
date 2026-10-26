@@ -1,0 +1,3 @@
+{ "name":"@syncwave/sim","version":"0.1.0","type":"module","private":true,
+  "scripts":{"start":"node src/run.js"},
+  "dependencies":{"ws":"^8.18.0"} }

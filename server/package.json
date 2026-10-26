@@ -1,0 +1,3 @@
+{ "name":"@syncwave/server","version":"0.1.0","type":"module","private":true,
+  "scripts":{"dev":"node --watch src/index.js","start":"node src/index.js","test":"node --test"},
+  "dependencies":{"express":"^4.19.2","ws":"^8.18.0"} }

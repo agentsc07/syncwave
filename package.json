@@ -1,0 +1,13 @@
+{
+  "name": "syncwave",
+  "private": true,
+  "type": "module",
+  "workspaces": ["server", "client", "sim"],
+  "scripts": {
+    "dev:server": "npm -w server run dev",
+    "dev:client": "npm -w client run dev",
+    "build": "npm -w client run build",
+    "start": "npm -w server run start",
+    "sim": "node sim/src/run.js"
+  }
+}

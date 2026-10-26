@@ -1,0 +1,10 @@
+node_modules/
+uploads/
+dist/
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+.DS_Store
+_holding/
