@@ -1,5 +1,6 @@
 import type { Channel, Device, RoomState } from './types';
 import { DUCK_GAIN, LiveScheduler, decodeFrame, pcmToFloat } from './livemath';
+import { STEMS, diffSources, wantedSources, type SourceName, type StemName } from './orchestra';
 
 // ---------------------------------------------------------------------------
 // Pure functions (testable in Node)
@@ -143,6 +144,9 @@ export class AudioEngine {
 
   private serverNow: () => number = () => Date.now();
   private buffers = new Map<string, AudioBuffer>();
+  private stemBuffers = new Map<string, AudioBuffer>(); // `${trackId}|${stem}`
+  private stemLoading = new Map<string, Promise<void>>();
+  private stemGains = new Map<StemName, GainNode>();
   private loading = new Map<string, Promise<void>>();
   private localVolume = 1;
   private roomVolume = 1;
@@ -150,7 +154,9 @@ export class AudioEngine {
 
   private lastState: RoomState | null = null;
   private lastSelf: Device | null = null;
-  private src: AudioBufferSourceNode | null = null;
+  /** Running sources of the current playback; all share one timeline anchor (anchorPosMs/anchorCtx/rate). */
+  private srcs = new Map<SourceName, AudioBufferSourceNode>();
+  private group = 0;
   private key = '';
   private trackId: string | null = null;
   private trimApplied = 0;
@@ -199,6 +205,11 @@ export class AudioEngine {
     this.input = ctx.createGain();
     this.fileGain = ctx.createGain();
     this.fileGain.connect(this.input);
+    for (const s of STEMS) {
+      const g = ctx.createGain();
+      g.connect(this.fileGain);
+      this.stemGains.set(s, g);
+    }
     const splitter = ctx.createChannelSplitter(2);
     const merger = ctx.createChannelMerger(2);
     this.input.connect(splitter);
@@ -288,6 +299,37 @@ export class AudioEngine {
     return p.then(() => this.reapply());
   }
 
+  hasStem(trackId: string, stem: string): boolean {
+    return this.stemBuffers.has(`${trackId}|${stem}`);
+  }
+
+  /** Stems of `trackId` that are decoded and ready to play. */
+  loadedStems(trackId: string): StemName[] {
+    return STEMS.filter((s) => this.stemBuffers.has(`${trackId}|${s}`));
+  }
+
+  /** Fetch + decode one stem of a separated track. Only the current track's stems are kept in memory. */
+  loadStem(url: string, trackId: string, stem: StemName): Promise<void> {
+    const key = `${trackId}|${stem}`;
+    if (this.stemBuffers.has(key)) return Promise.resolve();
+    const inflight = this.stemLoading.get(key);
+    if (inflight) return inflight;
+    const p = (async () => {
+      if (!this.ctx) throw new Error('Web Audio unavailable');
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${stem} download failed (${res.status})`);
+      const buf = await this.ctx.decodeAudioData(await res.arrayBuffer());
+      for (const k of this.stemBuffers.keys()) if (!k.startsWith(trackId + '|')) this.stemBuffers.delete(k);
+      this.stemBuffers.set(key, buf);
+    })().finally(() => this.stemLoading.delete(key));
+    this.stemLoading.set(key, p);
+    return p.then(() => this.reapply());
+  }
+
+  private bufferFor(trackId: string, name: SourceName): AudioBuffer | undefined {
+    return name === 'mix' ? this.buffers.get(trackId) : this.stemBuffers.get(`${trackId}|${name}`);
+  }
+
   setLocalVolume(v: number): void {
     this.localVolume = Math.max(0, Math.min(1, v));
     this.updateVolume();
@@ -345,6 +387,7 @@ export class AudioEngine {
     if (!this.ctx) return;
     this.roomVolume = state.volume;
     this.updateVolume();
+    this.applyStemVolumes(state);
     const ch = self?.channel ?? 'stereo';
     if (ch !== this.channel) this.setChannel(ch);
     const trim = self?.trimMs ?? 0;
@@ -355,7 +398,7 @@ export class AudioEngine {
     this.applyLive(live);
     if (live?.kind === 'share') {
       // live share replaces file playback entirely
-      this.stopSource();
+      this.stopSources();
       this.key = '';
       this.playing = false;
       this.pausedPos = 0;
@@ -364,24 +407,49 @@ export class AudioEngine {
     }
 
     if (pb.status === 'paused' || pb.status === 'stopped' || pb.startServerTime == null || !pb.trackId) {
-      this.stopSource();
+      this.stopSources();
       this.key = '';
       this.pausedPos = pb.status === 'paused' ? pb.pausedPositionMs : 0;
       this.playing = false;
       this.driftMs = 0;
       return;
     }
-    const buf = this.buffers.get(pb.trackId);
-    if (!buf || this.ctx.state !== 'running') {
-      // not ready to produce sound yet; reapply() is triggered on load/unlock
-      this.stopSource();
+    const track = state.tracks.find((t) => t.id === pb.trackId);
+    const want = wantedSources(track, state.orchestra, self?.stems);
+    if (this.ctx.state !== 'running') {
+      this.stopSources();
       this.key = '';
       this.playing = false;
       return;
     }
+    const have = want.every((n) => this.bufferFor(pb.trackId!, n));
     const key = `${pb.trackId}|${pb.startServerTime}`;
-    if (key === this.key && this.src && trim === this.trimApplied) return;
-    this.startSource(buf, pb.trackId, pb.startServerTime, trim, key);
+    if (this.srcs.size > 0 && key === this.key && trim === this.trimApplied) {
+      const d = diffSources([...this.srcs.keys()], want);
+      if (d.add.length === 0 && d.remove.length === 0) return;
+      if (!have) return; // assignment changed: keep the current sources until the new ones are decoded
+      if (this.ctx.currentTime >= this.startCtx) this.swapSources(pb.trackId, want);
+      else this.startSources(pb.trackId, want, pb.startServerTime, trim, key); // not started yet: just re-plan
+      return;
+    }
+    if (!have) {
+      // not ready to produce sound yet; reapply() is triggered on load/unlock
+      this.stopSources();
+      this.key = '';
+      this.playing = false;
+      return;
+    }
+    this.startSources(pb.trackId, want, pb.startServerTime, trim, key);
+  }
+
+  private applyStemVolumes(state: RoomState) {
+    const ctx = this.ctx;
+    const vols = state.orchestra?.stemVolumes;
+    if (!ctx) return;
+    for (const s of STEMS) {
+      const v = vols && typeof vols[s] === 'number' ? Math.max(0, Math.min(1, vols[s])) : 1;
+      this.stemGains.get(s)?.gain.setTargetAtTime(v, ctx.currentTime, 0.02);
+    }
   }
 
   private applyLive(live: RoomState['live']) {
@@ -435,35 +503,40 @@ export class AudioEngine {
     if (this.lastState) this.applyState(this.lastState, this.lastSelf);
   }
 
-  private startSource(buf: AudioBuffer, trackId: string, S: number, trim: number, key: string) {
+  private connectSource(src: AudioBufferSourceNode, name: SourceName) {
+    src.connect(name === 'mix' ? this.fileGain : this.stemGains.get(name)!);
+  }
+
+  /** (Re)start all `names` together at the planned instant. They share one anchor so drift/seek treat them as one. */
+  private startSources(trackId: string, names: SourceName[], S: number, trim: number, key: string) {
     const ctx = this.ctx!;
-    this.stopSource();
+    this.stopSources();
+    const bufs = names.map((n) => [n, this.bufferFor(trackId, n)!] as const);
+    const durationSec = Math.min(...bufs.map(([, b]) => b.duration));
     const plan = planStart({
       ctxNow: ctx.currentTime,
       serverNow: this.serverNow(),
       S,
       outputLatencyMs: this.outputLatencyMs,
       trimMs: trim,
-      durationSec: buf.duration,
+      durationSec,
     });
     this.key = key;
     this.trimApplied = trim;
-    this.durationMs = buf.duration * 1000;
+    this.durationMs = durationSec * 1000;
     if (!plan) {
       this.playing = false; // past the end
       return;
     }
-    const src = ctx.createBufferSource();
-    src.buffer = buf;
-    src.connect(this.fileGain);
-    src.onended = () => {
-      if (this.src !== src) return;
-      this.src = null;
-      this.playing = false;
-      for (const cb of this.endCbs) cb(trackId);
-    };
-    src.start(plan.when, plan.offsetSec);
-    this.src = src;
+    const group = ++this.group;
+    for (const [name, buf] of bufs) {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      this.connectSource(src, name);
+      src.onended = () => this.onSourceEnded(group, trackId);
+      src.start(plan.when, plan.offsetSec);
+      this.srcs.set(name, src);
+    }
     this.rate = 1;
     this.anchorCtx = plan.when;
     this.anchorPosMs = plan.offsetSec * 1000;
@@ -472,27 +545,59 @@ export class AudioEngine {
     this.driftMs = 0;
   }
 
-  private stopSource() {
-    const s = this.src;
-    if (!s) return;
-    this.src = null;
-    s.onended = null;
-    try {
-      s.stop();
-    } catch {
-      /* ignore */
+  private onSourceEnded(group: number, trackId: string) {
+    if (group !== this.group || this.srcs.size === 0) return; // superseded or already stopped
+    this.srcs.clear();
+    this.playing = false;
+    for (const cb of this.endCbs) cb(trackId);
+  }
+
+  /**
+   * Orchestra: change the running source set without touching the timeline. Kept sources keep playing;
+   * new ones start at the instant (now + lead) at the position the shared anchor says is current, with the
+   * current nudged playbackRate; removed ones stop at that same instant.
+   */
+  private swapSources(trackId: string, want: SourceName[]) {
+    const ctx = this.ctx!;
+    const d = diffSources([...this.srcs.keys()], want);
+    const when = ctx.currentTime + START_LEAD_S;
+    const posSec = positionFromAnchor(this.anchorPosMs, this.anchorCtx, this.rate, when) / 1000;
+    const group = this.group;
+    for (const name of d.remove) {
+      const src = this.srcs.get(name)!;
+      this.srcs.delete(name);
+      src.onended = null;
+      try { src.stop(when); } catch { /* ignore */ }
+      setTimeout(() => { try { src.disconnect(); } catch { /* ignore */ } }, START_LEAD_S * 1000 + 100);
     }
-    try {
-      s.disconnect();
-    } catch {
-      /* ignore */
+    for (const name of d.add) {
+      const buf = this.bufferFor(trackId, name)!;
+      if (posSec >= buf.duration) continue;
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = this.rate;
+      this.connectSource(src, name);
+      src.onended = () => this.onSourceEnded(group, trackId);
+      src.start(when, posSec);
+      this.srcs.set(name, src);
     }
+    if (this.srcs.size === 0) this.playing = false;
+  }
+
+  private stopSources() {
+    this.group++;
+    for (const s of this.srcs.values()) {
+      s.onended = null;
+      try { s.stop(); } catch { /* ignore */ }
+      try { s.disconnect(); } catch { /* ignore */ }
+    }
+    this.srcs.clear();
   }
 
   /** Current track position in ms (what is being rendered now); paused position when paused. */
   getPositionMs(): number {
     if (!this.ctx) return 0;
-    if (this.playing && this.src) {
+    if (this.playing && this.srcs.size > 0) {
       const t = this.ctx.currentTime;
       if (t < this.startCtx) return 0;
       return Math.max(0, positionFromAnchor(this.anchorPosMs, this.anchorCtx, this.rate, t));
@@ -504,7 +609,7 @@ export class AudioEngine {
   measureDriftMs(): number | null {
     const ctx = this.ctx;
     const pb = this.lastState?.playback;
-    if (!ctx || !this.playing || !this.src || !pb || pb.startServerTime == null) return null;
+    if (!ctx || !this.playing || this.srcs.size === 0 || !pb || pb.startServerTime == null) return null;
     if (ctx.currentTime < this.startCtx + 0.05) return null; // not started yet
     const actual = positionFromAnchor(this.anchorPosMs, this.anchorCtx, this.rate, ctx.currentTime);
     const expected = expectedPositionMs(this.serverNow(), pb.startServerTime, this.outputLatencyMs, this.trimApplied);
@@ -524,13 +629,13 @@ export class AudioEngine {
     if (dec.action === 'reseek') {
       this.key = ''; // force restart at the correct offset
       this.reapply();
-    } else if (this.src) {
+    } else if (this.srcs.size > 0) {
       if (Math.abs(dec.rate - this.rate) > 1e-6) {
         const now = ctx.currentTime;
         this.anchorPosMs = positionFromAnchor(this.anchorPosMs, this.anchorCtx, this.rate, now);
         this.anchorCtx = now;
         this.rate = dec.rate;
-        this.src.playbackRate.setValueAtTime(dec.rate, now);
+        for (const src of this.srcs.values()) src.playbackRate.setValueAtTime(dec.rate, now); // all stems together
       }
     }
     for (const cb of this.reportCbs) cb({ driftMs: this.driftMs });
@@ -579,7 +684,7 @@ export class AudioEngine {
 
   /** Stop everything (leave room). */
   dispose(): void {
-    this.stopSource();
+    this.stopSources();
     this.stopLiveSources();
     this.playing = false;
     if (this.driftTimer) clearInterval(this.driftTimer);

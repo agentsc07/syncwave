@@ -1,5 +1,6 @@
 import { randomInt, randomBytes, randomUUID } from 'node:crypto';
 import { now as realNow } from './clock.js';
+import { STEMS, autoAssign, normalizeStems } from './orchestra.js';
 
 export const CHANNELS = ['stereo', 'left', 'right', 'center', 'rear-left', 'rear-right', 'sub'];
 export const PLAY_LEAD_MS = 1500;
@@ -19,6 +20,7 @@ export const CALIB = {
 };
 export const CALIB_ERRORS = ['mic-denied', 'insecure-context', 'mic-error', 'low-confidence'];
 export const idleCalibration = () => ({ status: 'idle', runId: null, step: 0, total: 0, phase: 'idle', deviceId: null, results: {}, error: null });
+export const idleStems = () => ({ status: 'idle', progress: 0, names: [] });
 export const DEVICE_TTL_MS = 60_000;
 export const ROOM_EMPTY_TTL_MS = 10 * 60_000;
 const ID_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no I, L, O, 0, 1
@@ -36,7 +38,8 @@ export function makeRoomId() {
  * `clock` is injectable for tests.
  */
 export class Room {
-  constructor(roomId, { clock = realNow, onChange, calib } = {}) {
+  constructor(roomId, { clock = realNow, onChange, calib, hooks } = {}) {
+    this.hooks = hooks ?? {}; // {separationEnabled, separate(room, trackId), addDemo(room, slug)} injected by app.js
     this.calib = { ...CALIB, ...calib };
     this.roomId = roomId;
     this.clock = clock;
@@ -51,6 +54,7 @@ export class Room {
     this.volume = 1;
     this.lights = false;
     this.live = null; // {kind, sourceId, bufferMs} | null
+    this.orchestra = { enabled: false, mode: 'auto', hostPlaysAll: false, stemVolumes: { vocals: 1, drums: 1, bass: 1, other: 1 } };
     this.calibration = idleCalibration();
     this._cal = null; // internal run: {runId, plan, timer}
     this.hostId = '';
@@ -92,11 +96,14 @@ export class Room {
       lights: this.lights,
       live: this.live ? { ...this.live } : null,
       calibration: this.calibration,
+      orchestra: { ...this.orchestra, stemVolumes: { ...this.orchestra.stemVolumes } },
+      features: { separation: !!this.hooks.separationEnabled },
       hostId: this.hostId,
     };
   }
 
   broadcast() {
+    this.applyAuto();
     this.armStatusTimer();
     const msg = { type: 'state', ...this.snapshot() };
     for (const conn of this.conns.values()) conn.send(msg);
@@ -151,7 +158,7 @@ export class Room {
       d = {
         id: deviceId, name: String(name || 'Device').slice(0, 40), isHost: false, trimMs: 0,
         channel: 'stereo', x: 0.5, y: 0.5, readyTrackId: null, offsetMs: null, driftMs: null,
-        rtt: null, syncScore: null, lastSeen: t, connected: true,
+        rtt: null, syncScore: null, stems: null, readyStems: [], lastSeen: t, connected: true,
       };
       this.devices.set(deviceId, d);
       this.joinedAt.set(deviceId, ++this.seq);
@@ -261,13 +268,49 @@ export class Room {
   }
 
   // ---------- tracks ----------
-  addTrack({ id = randomUUID(), name, sizeBytes, durationMs }) {
-    const tr = { id, name, sizeBytes };
+  addTrack({ id = randomUUID(), name, sizeBytes, durationMs, stems, stemsOnly }) {
+    const tr = { id, name, sizeBytes, stems: stems ?? idleStems() };
+    if (stemsOnly) tr.stemsOnly = true; // demo track: no full mix file, only the 4 stems
     if (num(durationMs)) tr.durationMs = durationMs;
     this.tracks.set(id, tr);
     if (!this.playback.trackId) this.playback = { ...this.playback, trackId: id };
     this.broadcast();
     return tr;
+  }
+
+  /** Merge a patch into a track's stems status (separation progress / result). soft = coalesced broadcast. */
+  setStems(trackId, patch, { soft = false } = {}) {
+    const tr = this.tracks.get(trackId);
+    if (!tr) return;
+    tr.stems = { ...(tr.stems ?? idleStems()), ...patch };
+    if (tr.stems.error === undefined) delete tr.stems.error;
+    if (soft) this.broadcastSoon(); else this.broadcast();
+  }
+
+  // ---------- orchestra ----------
+  /** Is stem playback in effect for this track right now? */
+  orchestraActive(trackId) {
+    return this.orchestra.enabled && this.tracks.get(trackId)?.stems?.status === 'ready';
+  }
+
+  /** Stems a device must have decoded before `play` (empty = just the full mix). */
+  requiredStems(d, trackId) {
+    const tr = this.tracks.get(trackId);
+    const mine = this.orchestraActive(trackId) ? d.stems : null;
+    if (tr?.stemsOnly) return mine ?? STEMS;
+    return mine ?? [];
+  }
+
+  isReadyFor(d, trackId) {
+    return d.readyTrackId === trackId && this.requiredStems(d, trackId).every((s) => d.readyStems?.includes(s));
+  }
+
+  /** Auto mode: recompute assignments from the room map (idempotent; called on every broadcast). */
+  applyAuto() {
+    if (this.orchestra.mode !== 'auto') return;
+    const part = this.connectedDevices().filter((d) => !(this.orchestra.hostPlaysAll && d.id === this.hostId));
+    const map = autoAssign(part.map((d) => ({ id: d.id, x: d.x, order: this.joinedAt.get(d.id) ?? 0 })));
+    for (const d of this.devices.values()) d.stems = map.get(d.id) ?? null;
   }
 
   setCurrentTrack(trackId) {
@@ -291,7 +334,11 @@ export class Room {
     switch (msg.type) {
       // ----- any device -----
       case 'ready':
-        if (typeof msg.trackId === 'string') { d.readyTrackId = msg.trackId; this.broadcast(); }
+        if (typeof msg.trackId === 'string') {
+          d.readyTrackId = msg.trackId;
+          d.readyStems = Array.isArray(msg.stems) ? STEMS.filter((x) => msg.stems.includes(x)) : [];
+          this.broadcast();
+        }
         return;
       case 'setTrimSelf':
         if (num(msg.ms)) { d.trimMs = clamp(msg.ms, -2000, 2000); this.broadcast(); }
@@ -336,7 +383,8 @@ export class Room {
         if (!p.trackId) return this.error(deviceId, 'no track');
         const st = this.derivedStatus(t);
         if (st === 'playing' || st === 'scheduled') return;
-        if (!this.connectedDevices().every((x) => x.readyTrackId === p.trackId)) {
+        this.applyAuto();
+        if (!this.connectedDevices().every((x) => this.isReadyFor(x, p.trackId))) {
           return this.error(deviceId, 'not all ready');
         }
         this.playback = { ...p, status: 'scheduled', startServerTime: t + PLAY_LEAD_MS - p.pausedPositionMs };
@@ -395,6 +443,36 @@ export class Room {
         if (num(msg.y)) o.y = clamp(msg.y, 0, 1);
         break;
       }
+      case 'orchestraSet': {
+        const o = this.orchestra;
+        if (typeof msg.enabled === 'boolean') o.enabled = msg.enabled;
+        if (msg.mode === 'auto' || msg.mode === 'manual') o.mode = msg.mode;
+        if (typeof msg.hostPlaysAll === 'boolean') o.hostPlaysAll = msg.hostPlaysAll;
+        if (msg.stemVolumes && typeof msg.stemVolumes === 'object') {
+          for (const s of STEMS) if (num(msg.stemVolumes[s])) o.stemVolumes[s] = clamp(msg.stemVolumes[s], 0, 1);
+        }
+        if (msg.everyone === true) {
+          o.mode = 'manual';
+          for (const x of this.devices.values()) x.stems = null;
+        }
+        break;
+      }
+      case 'assignStems': {
+        const o = this.devices.get(msg.deviceId);
+        if (!o) return;
+        if (msg.stems != null && !Array.isArray(msg.stems)) return;
+        o.stems = normalizeStems(msg.stems);
+        this.orchestra.mode = 'manual';
+        break;
+      }
+      case 'separate':
+        if (!this.hooks.separationEnabled) return this.error(deviceId, 'separation is not configured on this server');
+        if (!this.tracks.has(msg.trackId)) return this.error(deviceId, 'unknown track');
+        this.hooks.separate?.(this, msg.trackId, deviceId);
+        return;
+      case 'addDemo':
+        this.hooks.addDemo?.(this, msg.slug, deviceId);
+        return;
       case 'liveStart': {
         if (!LIVE_KINDS.includes(msg.kind)) return this.error(deviceId, 'bad live kind');
         if (this.live) return this.error(deviceId, 'live already active');
@@ -533,8 +611,9 @@ export class Room {
 }
 
 export class RoomManager {
-  constructor({ clock = realNow } = {}) {
+  constructor({ clock = realNow, hooks } = {}) {
     this.clock = clock;
+    this.hooks = hooks;
     this.rooms = new Map();
     this.sweeper = null;
     this.onRoomDeleted = null;
@@ -542,7 +621,7 @@ export class RoomManager {
   create() {
     let id;
     do { id = makeRoomId(); } while (this.rooms.has(id));
-    const room = new Room(id, { clock: this.clock });
+    const room = new Room(id, { clock: this.clock, hooks: this.hooks });
     this.rooms.set(id, room);
     return room;
   }

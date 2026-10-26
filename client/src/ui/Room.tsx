@@ -8,8 +8,9 @@ import Radar from './Radar';
 import SpatialMap from './SpatialMap';
 import LightShow from './LightShow';
 import CalibratePanel, { ScoreBadge } from './Calibrate';
+import OrchestraPanel from './Orchestra';
 
-type Tab = 'play' | 'radar' | 'space' | 'people';
+type Tab = 'play' | 'orch' | 'radar' | 'space' | 'people';
 
 export default function RoomPage({ roomId, radarOnly }: { roomId: string; radarOnly: boolean }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -88,15 +89,16 @@ function Live({ session, roomId, radarOnly }: { session: Session; roomId: string
       </header>
 
       <nav className="tabs" role="tablist">
-        {(['play', 'radar', 'space', 'people'] as Tab[]).map((t) => (
+        {(['play', 'orch', 'radar', 'space', 'people'] as Tab[]).map((t) => (
           <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>
-            {{ play: 'Play', radar: 'Radar', space: 'Space', people: `Devices ${state.devices.filter((d) => d.connected).length}` }[t]}
+            {{ play: 'Play', orch: state.orchestra?.enabled ? 'Orchestra ●' : 'Orchestra', radar: 'Radar', space: 'Space', people: `Devices ${state.devices.filter((d) => d.connected).length}` }[t]}
           </button>
         ))}
       </nav>
 
       <section className="pane">
         {tab === 'play' && <PlayPane session={session} state={state} isHost={isHost} roomId={roomId} />}
+        {tab === 'orch' && <OrchestraPanel session={session} state={state} isHost={isHost} />}
         {tab === 'radar' && (
           <>
             <Radar devices={state.devices} selfId={selfId} />

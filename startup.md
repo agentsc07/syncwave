@@ -15,11 +15,20 @@ npm run build && npm start      # http://localhost:3000  (PORT=3001 npm start to
 
 Open it on phones via your LAN IP, `http://<ip>:3000`. Mic / tab-capture need HTTPS: see README "Live share and Announce".
 
+**Optional: Orchestra mode (stem separation).** Without these the app works fully, only "Separate this song" is disabled.
+```
+export SEPARATOR_URL=https://<your-space>.hf.space   # the separator/ service, no trailing path
+export SEPARATOR_TOKEN=<same secret as the Space>
+npm start
+```
+Demo songs (no separator needed): put stems in `server/demo/<slug>/`, see `server/demo/README.md`. `DEMO_DIR` overrides the folder.
+
 **Stop:** Ctrl+C. If the port is stuck: `lsof -nP -iTCP:3000 -sTCP:LISTEN` then `kill <PID>`.
 
 **Tests:** `npm -w server test` · simulation: `npm run sim -- --devices 5 --duration 600 --jitter 10`
 
 **Common problems**
+- *"Stem separation is not configured"* — set `SEPARATOR_URL` and `SEPARATOR_TOKEN` and restart. *"separator rejected the token"* — the token differs from the Space secret. *"separator unreachable"* — a sleeping free Space needs about a minute; press Try again.
 - *Port 3000 in use* — see Stop above, or use another `PORT`.
 - *Tests/build hang reading node_modules* — iCloud evicted files (project is under Desktop). Move the project out of iCloud or reinstall `node_modules`.
 - *Phone shows QR but can't join* — you opened the host page via `localhost`; use the LAN IP.

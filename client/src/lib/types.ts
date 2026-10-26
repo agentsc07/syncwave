@@ -1,4 +1,6 @@
 // Contract types from PROTOCOL.md (client side). Keep in sync with that file.
+import type { OrchestraState, StemsInfo } from './orchestra';
+export type { OrchestraState, StemsInfo, StemName } from './orchestra';
 
 export type Channel = 'stereo' | 'left' | 'right' | 'center' | 'rear-left' | 'rear-right' | 'sub';
 
@@ -15,6 +17,8 @@ export interface Device {
   driftMs: number | null;
   rtt: number | null;
   syncScore?: number | null; // 0..100 from the last auto-calibration
+  stems?: string[] | null; // orchestra: stems this device plays (null = full mix)
+  readyStems?: string[]; // stems this device has decoded for readyTrackId
   lastSeen: number;
   connected: boolean;
 }
@@ -25,6 +29,8 @@ export interface Track {
   sizeBytes: number;
   votes: number; voters?: string[];
   durationMs?: number;
+  stems?: StemsInfo;
+  stemsOnly?: boolean; // demo track: only the 4 stems exist, no full-mix file
 }
 
 export interface Playback {
@@ -64,6 +70,8 @@ export interface RoomState {
   lights: boolean;
   live: LiveInfo | null;
   calibration?: CalibrationState;
+  orchestra?: OrchestraState;
+  features?: { separation: boolean };
   hostId: string;
 }
 
@@ -71,7 +79,7 @@ export interface RoomState {
 export type ClientMessage =
   | { type: 'ping'; t0: number }
   | { type: 'join'; roomId: string; name: string; deviceId: string; hostToken?: string }
-  | { type: 'ready'; trackId: string }
+  | { type: 'ready'; trackId: string; stems?: string[] }
   | { type: 'play' }
   | { type: 'pause' }
   | { type: 'seek'; positionMs: number }
@@ -93,6 +101,10 @@ export type ClientMessage =
   | { type: 'calibrateCancel' }
   | { type: 'calibrateReady'; runId: string }
   | { type: 'calibrationResult'; runId: string; results?: Record<string, { delayMs: number; score: number; error?: string }>; error?: string }
+  | { type: 'orchestraSet'; enabled?: boolean; mode?: 'auto' | 'manual'; hostPlaysAll?: boolean; everyone?: boolean; stemVolumes?: Partial<Record<'vocals' | 'drums' | 'bass' | 'other', number>> }
+  | { type: 'assignStems'; deviceId: string; stems: string[] | null }
+  | { type: 'separate'; trackId: string }
+  | { type: 'addDemo'; slug: string }
   | { type: 'leave' };
 
 export type ServerMessage =

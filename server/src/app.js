@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { RoomManager } from './room.js';
 import { now } from './clock.js';
+import { STEMS } from './orchestra.js';
+import { createSeparator } from './separator.js';
+import { listDemos, readDemo } from './demo.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const MAX_UPLOAD = 100 * 1024 * 1024;
@@ -22,14 +25,53 @@ export function createApp({
   clientDist = path.join(here, '..', '..', 'client', 'dist'),
   clock = now,
   tls = null, // {key, cert} -> serve HTTPS/WSS
+  demoDir = process.env.DEMO_DIR || path.join(here, '..', 'demo'),
+  // {url, token, pollMs, ...}; defaults to env SEPARATOR_URL / SEPARATOR_TOKEN. Empty url = separation disabled.
+  separator: separatorOpts = {},
 } = {}) {
   fs.mkdirSync(uploadDir, { recursive: true });
-  const rooms = new RoomManager({ clock });
   const files = new Map(); // trackId -> {file, mime, roomId}
+  const stemDirs = new Map(); // trackId -> directory holding {vocals,drums,bass,other}.mp3 (separator cache or demo folder)
+  const separator = createSeparator({
+    url: process.env.SEPARATOR_URL, token: process.env.SEPARATOR_TOKEN,
+    ...separatorOpts, cacheDir: path.join(uploadDir, 'stems'),
+  });
+
+  const hooks = {
+    separationEnabled: separator.enabled,
+    separate(room, trackId, hostId) {
+      const tr = room.tracks.get(trackId);
+      const f = files.get(trackId);
+      if (!tr || !f) return room.error(hostId, 'this track has no uploaded audio to separate');
+      if (tr.stems?.status === 'separating' || tr.stems?.status === 'ready') return;
+      room.setStems(trackId, { status: 'separating', progress: 0, error: undefined, names: [] });
+      separator.separate({ file: f.file, name: tr.name, onProgress: (p) => room.setStems(trackId, { progress: Math.round(p * 1000) / 1000 }, { soft: true }) })
+        .then(({ dir, names }) => {
+          separator.pin(dir);
+          stemDirs.set(trackId, dir);
+          room.setStems(trackId, { status: 'ready', progress: 1, error: undefined, names });
+        })
+        .catch((e) => room.setStems(trackId, { status: 'error', error: String(e?.message ?? e).slice(0, 200) }));
+    },
+    addDemo(room, slug, hostId) {
+      const demo = readDemo(demoDir, slug);
+      if (!demo) return room.error(hostId, 'unknown demo');
+      const trackId = randomUUID();
+      stemDirs.set(trackId, demo.dir);
+      room.addTrack({
+        id: trackId, name: demo.title, sizeBytes: demo.sizeBytes, durationMs: demo.durationSec ? Math.round(demo.durationSec * 1000) : undefined,
+        stemsOnly: true, stems: { status: 'ready', progress: 1, names: [...STEMS] },
+      });
+      const st = room.derivedStatus();
+      if (st !== 'playing' && st !== 'scheduled') { room.setCurrentTrack(trackId); room.broadcast(); }
+    },
+  };
+  const rooms = new RoomManager({ clock, hooks });
   rooms.onRoomDeleted = (room) => {
     for (const id of room.tracks.keys()) {
       const f = files.get(id);
       if (f) { fs.rm(f.file, { force: true }, () => {}); files.delete(id); }
+      stemDirs.delete(id); // cached stems / demo files stay on disk
     }
   };
 
@@ -41,6 +83,10 @@ export function createApp({
     res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
+  });
+
+  app.get('/api/demo', (req, res) => {
+    res.json({ separation: separator.enabled, demos: listDemos(demoDir) });
   });
 
   app.post('/api/rooms', (req, res) => {
@@ -100,6 +146,16 @@ export function createApp({
       headers: { 'Content-Type': f.mime, 'Cache-Control': 'public, max-age=31536000, immutable' },
       acceptRanges: true,
     });
+  });
+
+  app.get('/media/:trackId/:stem', (req, res) => {
+    const stem = req.params.stem.replace(/\.mp3$/, '');
+    const dir = stemDirs.get(req.params.trackId);
+    if (!dir || !STEMS.includes(stem)) return res.status(404).end();
+    res.sendFile(path.resolve(dir, `${stem}.mp3`), {
+      headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=31536000, immutable' },
+      acceptRanges: true,
+    }, (err) => { if (err && !res.headersSent) res.status(404).end(); });
   });
 
   // Static client + SPA fallback (checked per request so a later build is picked up).
@@ -162,10 +218,11 @@ export function createApp({
   rooms.startSweeper();
 
   return {
-    app, server, rooms, files,
+    app, server, rooms, files, stemDirs, separator,
     listen: (port = 3000, host) => new Promise((resolve) => server.listen(port, host, () => resolve(server.address().port))),
     close: () => new Promise((resolve) => {
       rooms.stop();
+      separator.close();
       for (const c of wss.clients) c.terminate();
       server.close(() => resolve());
       server.closeAllConnections?.();

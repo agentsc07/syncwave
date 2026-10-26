@@ -1,5 +1,6 @@
 import { ClockSync } from './clock';
 import { AudioEngine } from './engine';
+import { stemsToLoad } from './orchestra';
 import { CalibrationClient } from './calibrationclient';
 import { startCapture, type CaptureHandle } from './livecapture';
 import { LIVE_BUFFER } from './livemath';
@@ -81,6 +82,7 @@ export class Session {
   private reportTimer: ReturnType<typeof setInterval> | null = null;
   private wakeLock: any = null;
   private loadingTrack: string | null = null;
+  private loading = new Set<string>();
   private readySent: string | null = null;
   private pending: ClientMessage[] = [];
 
@@ -380,44 +382,76 @@ export class Session {
     this.engine.applyState(this.state, this.self);
   }
 
+  /**
+   * Download+decode what this device needs for the current track, then tell the server (`ready`, with the
+   * list of decoded stems). Non-demo tracks always load the full mix (fallback); when orchestra mode is
+   * active the stems assigned to this device are loaded as well. Demo tracks only have stems.
+   */
   private preload() {
-    const id = this.state?.playback.trackId ?? null;
-    if (!id) {
+    const st = this.state;
+    const id = st?.playback.trackId ?? null;
+    const track = st?.tracks.find((t) => t.id === id);
+    if (!st || !id || !track) {
       this.loadStatus = 'idle';
       this.loadingTrack = null;
       return;
     }
-    if (this.engine.has(id)) {
-      this.loadStatus = 'ready';
-      if (this.readySent !== id) {
-        this.readySent = id;
-        this.send({ type: 'ready', trackId: id });
-      }
-      return;
+    const jobs: { key: string; run: () => Promise<void> }[] = [];
+    if (!track.stemsOnly && !this.engine.has(id)) {
+      jobs.push({ key: `mix|${id}`, run: () => this.engine.load(`/media/${encodeURIComponent(id)}`, id) });
     }
-    if (this.loadingTrack === id) return;
-    this.loadingTrack = id;
-    this.loadStatus = 'loading';
-    this.loadError = null;
-    this.engine
-      .load(`/media/${encodeURIComponent(id)}`, id)
-      .then(() => {
-        if (this.loadingTrack !== id) return;
-        this.loadStatus = 'ready';
-        this.readySent = id;
-        this.send({ type: 'ready', trackId: id });
-        this.applyEngine();
-        this.emit();
-      })
-      .catch((e) => {
-        if (this.loadingTrack !== id) return;
-        this.loadingTrack = null; // allow retry on next state
-        this.loadStatus = 'error';
-        this.loadError = String(e?.message ?? e);
-        this.emit();
-      });
+    for (const stem of stemsToLoad(track, st.orchestra, this.self?.stems)) {
+      if (!this.engine.hasStem(id, stem)) {
+        jobs.push({ key: `${stem}|${id}`, run: () => this.engine.loadStem(`/media/${encodeURIComponent(id)}/${stem}`, id, stem) });
+      }
+    }
+    for (const j of jobs) {
+      if (this.loading.has(j.key)) continue;
+      this.loading.add(j.key);
+      this.loadError = null;
+      j.run()
+        .then(() => {
+          this.loading.delete(j.key);
+          this.afterLoad();
+        })
+        .catch((e) => {
+          this.loading.delete(j.key); // retried on the next state broadcast
+          if (this.state?.playback.trackId !== id) return;
+          this.loadStatus = 'error';
+          this.loadError = String(e?.message ?? e);
+          this.emit();
+        });
+    }
+    this.afterLoad(false);
+  }
+
+  private afterLoad(apply = true) {
+    const st = this.state;
+    const id = st?.playback.trackId ?? null;
+    if (!st || !id) return;
+    const track = st.tracks.find((t) => t.id === id);
+    if (!track) return;
+    const pending = [...this.loading].some((k) => k.endsWith(`|${id}`));
+    const stems = this.engine.loadedStems(id);
+    const mixOk = track.stemsOnly ? stems.length > 0 : this.engine.has(id);
+    if (!pending && this.loadStatus !== 'error') this.loadStatus = 'ready';
+    else if (pending) this.loadStatus = 'loading';
+    if (mixOk) {
+      const sig = `${id}|${stems.join(',')}`;
+      if (this.readySent !== sig) {
+        this.readySent = sig;
+        this.send({ type: 'ready', trackId: id, stems });
+      }
+    }
+    if (apply) this.applyEngine();
     this.emit();
   }
+
+  // ---- orchestra (host) ----
+  orchestraSet(patch: Omit<Extract<ClientMessage, { type: 'orchestraSet' }>, 'type'>) { this.send({ type: 'orchestraSet', ...patch }); }
+  assignStems(deviceId: string, stems: string[] | null) { this.send({ type: 'assignStems', deviceId, stems }); }
+  separate(trackId: string) { this.send({ type: 'separate', trackId }); }
+  addDemo(slug: string) { this.send({ type: 'addDemo', slug }); }
 
   private sendReport() {
     if (!this.ws || this.ws.readyState !== 1) return;

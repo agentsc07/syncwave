@@ -76,3 +76,14 @@ Targets: median offset under 10 ms and worst under 20 ms (spec acceptance criter
 
 ## Auto-calibration
 Host: Devices tab -> **Auto-calibrate** (pause music first, keep the room quiet, needs HTTPS or localhost for the microphone). Each device plays a short 2-8 kHz chirp three times in turn while the host's mic records; cross-correlation measures each device's real acoustic delay and sets every trim so all devices line up with the host's device (positive trim = play earlier). Each device gets a 0-100 sync score (green/amber/red) shown in the device list and on the radar. The manual trim sliders remain as an override. Limits: sound travel time (about 3 ms per metre) is part of the measurement, so place the host device where you want the best sound; a noisy room or a quiet speaker gives a "low confidence" result, which leaves that device's trim unchanged. Covered by synthetic tests only (`server/test/calibrate.test.js`, `calibration.test.js`); not yet validated in real rooms.
+
+## Orchestra mode
+
+Split a song into vocals / drums / bass / other and let every phone play only its own part (stems start at the same scheduled instant, so the sync model is unchanged).
+
+1. **Stem source.** Either *Separate this song into stems* (Orchestra tab, host) which sends the track to the Demucs service in `separator/`, or pick a song from the **Demo library** (pre-separated, instant, see `server/demo/README.md`).
+2. **Configure the separator** on the SyncWave server: `SEPARATOR_URL=https://<space>.hf.space SEPARATOR_TOKEN=<secret> npm start`. Unset = separation disabled (the UI says so; demos and everything else still work). Separation takes minutes on a free CPU; results are cached by the track's SHA-256, so repeats are instant.
+3. **Turn Orchestra on.** *Auto-assign* follows the Space map left to right (vocals, drums, bass, other; 2 devices: vocals+other vs drums+bass; more devices than stems share round-robin) and reassigns when devices join, leave or move. Tap stem chips to assign by hand, *Everyone plays everything* to go back to the full song, four sliders mix the stems.
+4. **Fallback.** Orchestra off, or stems not ready: everyone plays the full mix. Play is only allowed once every device has decoded its assigned stems.
+
+Each device downloads the full mix plus its own stems (about 4 MB per stem at 128 kbps). Wire protocol: `PROTOCOL.md` "Orchestra mode".
