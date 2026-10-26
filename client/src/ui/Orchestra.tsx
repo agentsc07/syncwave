@@ -7,7 +7,25 @@ interface Demo { slug: string; title: string; durationSec: number | null }
 
 const SHORT: Record<StemName, string> = { vocals: 'Vocals', drums: 'Drums', bass: 'Bass', other: 'Other' };
 
-export default function OrchestraPanel({ session, state, isHost }: { session: Session; state: RoomState; isHost: boolean }) {
+/** Orchestra mode is not finished: the full panel below stays in the code but is hidden until this is true. */
+export const ORCHESTRA_AVAILABLE = false;
+
+function ComingSoon() {
+  return (
+    <div className="orch soon">
+      <span className="soonbadge">Coming soon</span>
+      <h3>Orchestra mode</h3>
+      <p>Split a song into vocals, drums, bass and other with AI (Demucs), and let every phone in the room play a different part, all in sync.</p>
+      <p className="hint">Still in development. The stem separation service and the per-device stem playback exist in the code, but the experience is not polished yet, so it is switched off for now. Everything else (synced playback, calibration, live share, announce, lights) works as normal.</p>
+    </div>
+  );
+}
+
+export default function OrchestraPanel(props: { session: Session; state: RoomState; isHost: boolean }) {
+  return ORCHESTRA_AVAILABLE ? <OrchestraFull {...props} /> : <ComingSoon />;
+}
+
+function OrchestraFull({ session, state, isHost }: { session: Session; state: RoomState; isHost: boolean }) {
   const o = state.orchestra;
   const sepOn = state.features?.separation ?? false;
   const track = state.tracks.find((t) => t.id === state.playback.trackId);

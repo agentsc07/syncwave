@@ -16,7 +16,8 @@ Client -> server:
 - `join {roomId, name, deviceId, hostToken?}`  (deviceId: client-generated uuid, persisted in localStorage; hostToken marks host). Reply: `joined {deviceId, isHost}` then `state`.
 - `ready {trackId}` device finished download+decode of trackId.
 - Host-only (ignored otherwise): `play {}` `pause {}` `seek {positionMs}` `next {}` `volume {value}`(0..1) `setTrim {deviceId, ms}` `setChannel {deviceId, channel, x?, y?}` `lights {on}` `kick {deviceId}` `setTrack {trackId}`
-- Host-only live audio: `liveStart {kind:'share'|'announce', bufferMs?}` (errors `live already active`; `share` also stops file playback, status 'stopped', track kept; `play` is refused with `live share active` while sharing), `liveStop {}`, `liveBuffer {ms}`. bufferMs is clamped: share 800..3000 (default 1500), announce 100..1000 (default 250). The live ends automatically if the source device disconnects or is removed.
+- Any device while live (not the source): `liveRx {played, late}` = chunks played / dropped as too late in the last ~2 s; stored as `device.liveRx`. If >=15 chunks and >=15% late, the server raises `live.bufferMs` by 300 ms (max of the kind, at most once per 2 s).
+- Host-only live audio: `liveStart {kind:'share'|'announce', bufferMs?}` (errors `live already active`; `share` also stops file playback, status 'stopped', track kept; `play` is refused with `live share active` while sharing), `liveStop {}`, `liveBuffer {ms}`. bufferMs is clamped: share 800..3000 (default 1500), announce 300..2000 (default 700). The live ends automatically if the source device disconnects or is removed.
 - Any device: `setTrimSelf {ms}`, `report {offsetMs, driftMs, rtt}` (sync health shown on radar), `queueAdd {trackId}`, `queueVote {trackId}`, `leave {}`.
 Server -> client:
 - `state {…RoomState}` broadcast on every change (full snapshot, small).

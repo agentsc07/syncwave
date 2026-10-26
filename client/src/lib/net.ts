@@ -3,7 +3,7 @@ import { AudioEngine } from './engine';
 import { stemsToLoad } from './orchestra';
 import { CalibrationClient } from './calibrationclient';
 import { startCapture, type CaptureHandle } from './livecapture';
-import { LIVE_BUFFER } from './livemath';
+import { LIVE_BUFFER, framePeak } from './livemath';
 import type {
   Channel,
   ClientMessage,
@@ -144,6 +144,7 @@ export class Session {
       // watchdog: the clock-sync pings are answered every few seconds, so 12 s of silence means a dead link
       if (this.status === 'open' && Date.now() - this.lastRx > 12000) { this.forceReconnect(0); return; }
       this.sendReport();
+      this.sendLiveRx();
     }, 2000);
     this.acquireWakeLock();
   }
@@ -195,7 +196,7 @@ export class Session {
 
   send(msg: ClientMessage): void {
     if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(msg));
-    else if (msg.type !== 'ping' && msg.type !== 'leave' && msg.type !== 'report') this.pending.push(msg);
+    else if (msg.type !== 'ping' && msg.type !== 'leave' && msg.type !== 'report' && msg.type !== 'liveRx') this.pending.push(msg);
   }
 
   get self(): Device | null {
@@ -223,6 +224,19 @@ export class Session {
   setLocalVolume(v: number) { this.engine.setLocalVolume(v); }
 
   // ---- live audio (host only) ----
+
+  /** Input level 0..1 (peak, decaying) of the live capture on this device, for the host's meter. */
+  liveLevel = 0;
+  /** Binary live frames sent by this device since the capture started. */
+  liveFramesSent = 0;
+
+  /** Receivers report how many live chunks played vs arrived too late; the server raises the delay if many are late. */
+  private sendLiveRx(): void {
+    const live = this.state?.live;
+    if (!live || live.sourceId === this.deviceId) { this.engine.takeLiveRx(); return; }
+    const r = this.engine.takeLiveRx();
+    if (r.played + r.late > 0) this.send({ type: 'liveRx', played: r.played, late: r.late });
+  }
 
   /** True while this device is capturing and sending live audio. */
   get liveCapturing(): boolean { return !!this.capture; }
@@ -264,13 +278,16 @@ export class Session {
       track.addEventListener('ended', () => { if (this.capture) this.stopLive(); });
       this.liveWanted = true;
       this.liveConfirmed = false;
+      this.liveLevel = 0;
+      this.liveFramesSent = 0;
       this.send({ type: 'liveStart', kind, bufferMs: bufferMs ?? LIVE_BUFFER[kind].def });
       const loopback = kind === 'share'; // announce: no local playout (the mic would feed back)
       this.capture = await startCapture(ctx, stream, {
         channels: kind === 'share' ? 2 : 1,
         serverNow: () => this.clock.serverNow(),
         onFrame: (buf) => {
-          if (this.ws && this.ws.readyState === 1) this.ws.send(buf);
+          if (this.ws && this.ws.readyState === 1) { this.ws.send(buf); this.liveFramesSent++; }
+          this.liveLevel = Math.max(this.liveLevel * 0.9, framePeak(buf));
           if (loopback) this.engine.pushLiveFrame(buf);
         },
       });

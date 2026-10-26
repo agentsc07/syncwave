@@ -19,6 +19,7 @@ export interface Device {
   syncScore?: number | null; // 0..100 from the last auto-calibration
   stems?: string[] | null; // orchestra: stems this device plays (null = full mix)
   readyStems?: string[]; // stems this device has decoded for readyTrackId
+  liveRx?: { played: number; late: number } | null; // last live-audio receive window (played / dropped-late chunks)
   lastSeen: number;
   connected: boolean;
 }
@@ -97,6 +98,7 @@ export type ClientMessage =
   | { type: 'liveStart'; kind: 'share' | 'announce'; bufferMs?: number }
   | { type: 'liveStop' }
   | { type: 'liveBuffer'; ms: number }
+  | { type: 'liveRx'; played: number; late: number }
   | { type: 'calibrateStart' }
   | { type: 'calibrateCancel' }
   | { type: 'calibrateReady'; runId: string }

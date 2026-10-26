@@ -10,6 +10,7 @@ import SpatialMap from './SpatialMap';
 import LightShow from './LightShow';
 import CalibratePanel, { ScoreBadge } from './Calibrate';
 import OrchestraPanel from './Orchestra';
+import DemoLibrary from './DemoLibrary';
 
 type Tab = 'play' | 'orch' | 'radar' | 'space' | 'people';
 
@@ -109,7 +110,7 @@ function Live({ session, roomId, radarOnly }: { session: Session; roomId: string
       <nav className="tabs" role="tablist" aria-label="Room sections">
         {(['play', 'orch', 'radar', 'space', 'people'] as Tab[]).map((t) => (
           <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>
-            {{ play: 'Play', orch: state.orchestra?.enabled ? 'Orchestra ●' : 'Orchestra', radar: 'Radar', space: 'Space', people: `Devices ${state.devices.filter((d) => d.connected).length}` }[t]}
+            {{ play: 'Play', orch: 'Orchestra · soon', radar: 'Radar', space: 'Space', people: `Devices ${state.devices.filter((d) => d.connected).length}` }[t]}
           </button>
         ))}
       </nav>
@@ -256,6 +257,7 @@ function PlayPane({ session, state, isHost, roomId }: { session: Session; state:
       </div>
       {err && <p className="err" role="alert">{err} <button className="linkbtn" onClick={() => setErr('')}>Dismiss</button></p>}
       <p className="hint center temp">Uploads are temporary: files are removed when the room closes or the server restarts. Keep your originals.</p>
+      {isHost && <DemoLibrary session={session} />}
 
       <h3>Up next</h3>
       {queued.length === 0 && <p className="hint">Queue is empty. Anyone can add a song and vote.</p>}
@@ -288,33 +290,81 @@ function InviteCard({ roomId, alone }: { roomId: string; alone: boolean }) {
   );
 }
 
+function LiveMeter({ session }: { session: Session }) {
+  useTick(80);
+  const lvl = Math.min(1, Math.sqrt(session.liveLevel)); // sqrt: quiet speech still moves the bar
+  return <div className="livemeter" role="meter" aria-label="Microphone level" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(lvl * 100)}><i style={{ width: `${lvl * 100}%` }} /></div>;
+}
+
 function LivePanel({ session, state }: { session: Session; state: RoomState }) {
   useTick(500); // re-render on session.liveError / liveStarting changes
   const live = state.live;
   const mine = live?.sourceId === session.deviceId;
   const busy = session.liveStarting;
   const [buf, setBuf] = useState<number | null>(null);
-  const bufMs = buf ?? (live?.kind === 'share' ? live.bufferMs : 1500);
+  const isAnn = live?.kind === 'announce';
+  const range = isAnn ? { min: 300, max: 2000 } : { min: 800, max: 3000 };
+  const bufMs = live ? live.bufferMs : (buf ?? 1500);
+  // press-and-hold = push to talk (release after 0.6 s stops it); a quick tap toggles on/off
+  const press = useRef<{ t: number; started: boolean; released: boolean } | null>(null);
+  const onAnnDown = () => {
+    press.current = null;
+    if (live || busy) return;
+    const p = { t: Date.now(), started: true, released: false };
+    press.current = p;
+    void session.startLive('announce').then((ok) => { if (ok && p.released && Date.now() - p.t > 600) session.stopLive(); });
+  };
+  const onAnnUp = () => {
+    const p = press.current;
+    if (!p) return;
+    p.released = true;
+    if (Date.now() - p.t > 600 && session.liveCapturing) session.stopLive();
+  };
+  const onAnnClick = () => {
+    if (press.current?.started) { press.current = null; return; } // already handled on pointer down/up
+    if (live && mine) session.stopLive();
+    else if (!live && !busy) void session.startLive('announce');
+  };
+  // announce health: silent mic / nobody receiving
+  const [since, setSince] = useState<number | null>(null);
+  useEffect(() => { setSince(isAnn && mine ? Date.now() : null); }, [isAnn, mine]);
+  const age = since ? Date.now() - since : 0;
+  const others = state.devices.filter((d) => d.id !== session.deviceId);
+  const rx = others.filter((d) => d.liveRx);
+  const hearing = rx.filter((d) => d.liveRx!.played > 0 && d.liveRx!.late / (d.liveRx!.played + d.liveRx!.late) < 0.5).length;
+  const tooLate = rx.length - hearing;
   return (
     <div className="livepanel">
       <div className="liverow">
         {live?.kind === 'share' && mine
           ? <button className="btn danger" onClick={() => session.stopLive()}>Stop sharing</button>
           : <button className="btn" disabled={busy || !!live} onClick={() => void session.startLive('share', bufMs)}>Share tab/system audio</button>}
-        {live?.kind === 'announce' && mine
-          ? <button className="btn primary" onClick={() => session.stopLive()}>Stop announcement</button>
-          : <button className="btn" disabled={busy || !!live} onClick={() => void session.startLive('announce')}>Announce (mic)</button>}
+        <button className={'btn' + (isAnn && mine ? ' primary' : '')} disabled={!(isAnn && mine) && !!live}
+          onPointerDown={onAnnDown} onPointerUp={onAnnUp} onPointerCancel={onAnnUp} onClick={onAnnClick}
+          onContextMenu={(e) => e.preventDefault()} style={{ touchAction: 'manipulation' }}>
+          {isAnn && mine ? 'Stop announcement' : busy ? 'Opening microphone...' : 'Announce (mic)'}
+        </button>
       </div>
       {live?.kind === 'share' && mine && (
         <p className="hint">Sharing live. This device plays the stream {(live.bufferMs / 1000).toFixed(1)} s late, like the others, and the shared tab is muted locally where the browser allows it (otherwise mute that tab to avoid echo).</p>
       )}
-      {live?.kind === 'announce' && mine && (
-        <p className="hint">Announcing. Music is ducked on every device. This device does not play your voice back, to avoid feedback.</p>
+      {isAnn && mine && (
+        <>
+          <LiveMeter session={session} />
+          <p className="hint">
+            Announcing to {others.length} device{others.length === 1 ? '' : 's'}. Music is ducked everywhere. This device does not play your voice back (feedback).
+            {' '}Tip: press and hold the button to talk, release to stop.
+          </p>
+          {age > 3000 && session.liveLevel < 0.01 && <p className="err">The microphone is not picking up any sound. Check the browser/system input device and that it is not muted.</p>}
+          {age > 3000 && session.liveFramesSent === 0 && <p className="err">No audio has been sent yet. The connection may be down.</p>}
+          {age > 4000 && others.length > 0 && rx.length === 0 && <p className="err">No other device has confirmed receiving the audio yet.</p>}
+          {rx.length > 0 && <p className="hint">{hearing} of {others.length} device{others.length === 1 ? '' : 's'} hearing it{tooLate > 0 ? `; ${tooLate} too slow (raising the delay automatically)` : ''}.</p>}
+        </>
       )}
       {live && !mine && <p className="hint">Another device is live.</p>}
-      <label className="vol"><span>Live delay {(bufMs / 1000).toFixed(1)} s</span>
-        <input type="range" min={800} max={3000} step={100} value={bufMs} disabled={!!live && live.kind !== 'share'}
-          onChange={(e) => { setBuf(+e.target.value); if (live?.kind === 'share') session.setLiveBuffer(+e.target.value); }} /></label>
+      <label className="vol"><span>Live delay {(bufMs / 1000).toFixed(1)} s{isAnn ? ' (announce)' : ''}</span>
+        <input type="range" min={range.min} max={range.max} step={100} value={Math.max(range.min, Math.min(range.max, bufMs))} disabled={!!live && !mine}
+          onChange={(e) => { setBuf(+e.target.value); if (live) session.setLiveBuffer(+e.target.value); }} /></label>
       {session.liveError && <p className="err">{session.liveError}</p>}
     </div>
   );

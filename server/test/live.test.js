@@ -92,7 +92,17 @@ test('live relay: host frames reach guests only, host-only control, stop on host
   // announce: default buffer, then host disconnect stops it
   H.send({ type: 'liveStart', kind: 'announce' });
   const an = await G1.waitLast((m) => m.type === 'state' && m.live);
-  assert.equal(an.live.bufferMs, 250);
+  assert.equal(an.live.bufferMs, 700);
+
+  // receivers report late chunks -> server raises the delay (rate limited), host's own report is ignored
+  G1.send({ type: 'liveRx', played: 5, late: 5 }); // too few samples: no change
+  G1.send({ type: 'liveRx', played: 20, late: 30 });
+  const bumped = await G2.wait((m) => m.type === 'state' && m.live?.bufferMs === 1000);
+  assert.deepEqual(bumped.devices.find((x) => x.id === 'g1').liveRx, { played: 20, late: 30 });
+  const mark = G2.msgs.length;
+  H.send({ type: 'liveRx', played: 1, late: 100 });
+  await sleep(100);
+  assert.equal(G2.msgs.slice(mark).filter((m) => m.type === 'state' && m.live?.bufferMs > 1000).length, 0);
   H.ws.close();
   const gone = await G1.waitLast((m) => m.type === 'state' && m.live === null);
   assert.ok(gone);

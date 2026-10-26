@@ -122,7 +122,12 @@ input[type=range]{width:100%;accent-color:var(--acc);height:28px;background:tran
 
 /* lights */
 .lights{position:fixed;inset:0;z-index:100;display:grid;place-items:end center;padding:2rem}
-.lights .lightbg{position:absolute;inset:0;opacity:.04;background:#000}
+.lights{background:#000}
+.lights .lightbg,.lights .lightglow{position:absolute;inset:0;opacity:0;will-change:opacity;pointer-events:none}
+.lights .lightglow{opacity:.1;background:radial-gradient(circle at 50% 55%,#4a2cff,transparent 70%)}
+.lights .lightring{position:absolute;left:50%;top:50%;width:min(90vw,90vh);height:min(90vw,90vh);margin:calc(min(90vw,90vh)/-2) 0 0 calc(min(90vw,90vh)/-2);border:6px solid #fff;border-radius:50%;opacity:0;will-change:transform,opacity;pointer-events:none}
+.lights .lightbpm{position:absolute;top:1rem;left:50%;transform:translateX(-50%);color:#fff;opacity:.55;font:600 .75rem var(--mono,monospace);letter-spacing:.15em;mix-blend-mode:difference}
+.lights .lightsoft{position:absolute;top:1rem;right:1rem;background:transparent;color:#fff;border:1px solid #fff8;border-radius:999px;padding:.35rem .7rem;font-size:.7rem;mix-blend-mode:difference}
 .lights span{position:relative;color:#fff;font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;mix-blend-mode:difference}
 .btn.on{background:var(--acc);color:#000}
 
@@ -131,6 +136,8 @@ input[type=range]{width:100%;accent-color:var(--acc);height:28px;background:tran
 .livepanel{border:1px solid var(--line);border-radius:12px;padding:.7rem;margin-bottom:.8rem;display:flex;flex-direction:column;gap:.5rem}
 .liverow{display:flex;gap:.5rem;flex-wrap:wrap}
 .liverow .btn{flex:1}
+.livemeter{height:8px;border-radius:4px;background:var(--line);overflow:hidden}
+.livemeter i{display:block;height:100%;background:var(--accent,#4ade80);transition:width .06s linear}
 .calpanel{margin:0 0 .8rem;display:flex;flex-direction:column;gap:.5rem}
 .calprog{display:flex;flex-direction:column;gap:.4rem}
 .calprog progress{width:100%;accent-color:var(--acc)}
@@ -244,3 +251,7 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 input[type=range]:disabled{opacity:.5}
 /* keep tab labels on one line on narrow phones */
 .tabs button{white-space:nowrap;font-size:clamp(.78rem,3.6vw,1rem)}
+
+/* Orchestra "coming soon" card */
+.orch.soon{padding:20px;border:1px dashed var(--line,#3a3f55);border-radius:14px;text-align:left}
+.soonbadge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:.75rem;letter-spacing:.06em;text-transform:uppercase;background:rgba(255,255,255,.08);color:var(--dim,#aab)}

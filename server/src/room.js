@@ -6,7 +6,7 @@ export const CHANNELS = ['stereo', 'left', 'right', 'center', 'rear-left', 'rear
 export const PLAY_LEAD_MS = 1500;
 export const SEEK_LEAD_MS = 1000;
 export const LIVE_KINDS = ['share', 'announce'];
-export const LIVE_BUFFER = { share: { def: 1500, min: 800, max: 3000 }, announce: { def: 250, min: 100, max: 1000 } };
+export const LIVE_BUFFER = { share: { def: 1500, min: 800, max: 3000 }, announce: { def: 700, min: 300, max: 2000 } };
 export const LIVE_MAGIC = 1; // first byte of every binary live frame (see PROTOCOL.md)
 export const LIVE_HEADER_BYTES = 20;
 export const CALIB = {
@@ -368,6 +368,27 @@ export class Room {
         this.broadcast();
         return;
       }
+      case 'liveRx': {
+        // Receiver stats for the last window: {played, late}. Late chunks mean the live delay is too small for this
+        // device's network + output latency (announce used to be silent on phones for this reason), so raise it.
+        const l = this.live;
+        if (!l || deviceId === l.sourceId || !num(msg.played) || !num(msg.late)) return;
+        const played = clamp(Math.round(msg.played), 0, 1e6), late = clamp(Math.round(msg.late), 0, 1e6);
+        d.liveRx = { played, late };
+        const total = played + late;
+        const now = this.clock();
+        if (total >= 15 && late / total >= 0.15 && now - (this._liveBump ?? 0) >= 2000) {
+          const r = LIVE_BUFFER[l.kind];
+          if (l.bufferMs < r.max) {
+            this._liveBump = now;
+            this.live = { ...l, bufferMs: Math.min(r.max, l.bufferMs + 300) };
+            this.broadcast();
+            return;
+          }
+        }
+        this.broadcastSoon();
+        return;
+      }
       case 'leave':
         this.remove(deviceId);
         return;
@@ -480,6 +501,7 @@ export class Room {
         const r = LIVE_BUFFER[msg.kind];
         const bufferMs = num(msg.bufferMs) ? clamp(Math.round(msg.bufferMs), r.min, r.max) : r.def;
         this.live = { kind: msg.kind, sourceId: deviceId, bufferMs };
+        for (const x of this.devices.values()) x.liveRx = null;
         if (msg.kind === 'share') {
           // file playback stops (track stays loaded; host presses play afterwards)
           this.playback = { ...p, status: 'stopped', startServerTime: null, pausedPositionMs: 0 };

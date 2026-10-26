@@ -73,7 +73,7 @@ test('live scheduling math', { skip: !fs.existsSync(tsc) && 'typescript not inst
     assert.equal(s3.schedule(chunk(0, 5000000), env(100, 5001000, { bufferMs: 800 })).action, 'drop');
     assert.equal(s3.schedule(chunk(1, 5000020), env(100, 5001000, { bufferMs: 3000 })).action, 'play');
     assert.equal(lm.clampBuffer('share', 10), 800);
-    assert.equal(lm.clampBuffer('announce', 99999), 1000);
+    assert.equal(lm.clampBuffer('announce', 99999), 2000);
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
   }

@@ -1,6 +1,6 @@
 # SyncWave
 
-**Turn every phone and laptop in a room into one synced speaker system, in the browser, with AI that gives each device its own part of the song and measures and fixes each device's real audio delay.**
+**Turn every phone and laptop in a room into one synced speaker system, in the browser, with a calibration step that measures and fixes each device's real audio delay, and lights and live audio that follow the music.**
 
 ## Live links
 
@@ -23,9 +23,9 @@ One phone speaker cannot fill a room, Bluetooth speakers play one at a time, and
 
 - **Zero install.** Open a link or scan a QR code; any modern browser becomes a speaker. Room code, join under 10 s, installable as a PWA.
 - **Synced playback.** Every device starts the same pre-loaded audio at the same instant and corrects drift while it plays.
-- **AI feature A: Orchestra mode.** Demucs (htdemucs) splits a song into vocals / drums / bass / other. Each phone plays a different stem, assigned by where it sits in the room, all in sync. "Everyone plays everything" is the fallback. The deployed app ships two pre-separated demo songs; separating your own songs runs locally.
+- **Coming soon: Orchestra mode.** AI stem separation (Demucs htdemucs: vocals / drums / bass / other) so each phone plays a different part. The code exists (`separator/`, server and client) but the experience is not polished, so it is switched off in the UI for now.
 - **AI/data feature B: acoustic auto-calibration.** Each device plays a chirp in turn; the host's microphone records; cross-correlation measures each device's real acoustic delay and sets its trim automatically. Each device gets a 0–100 sync score. This replaces dragging a trim slider for a Bluetooth speaker.
-- Also: sync radar (live offset per device), spatial mode (left/right/centre channels), beat light show, live tab-audio share, mic announce, guest queue with voting, host handoff, late join at the exact current position.
+- Also: sync radar (live offset per device), spatial mode (left/right/centre channels), beat-synced light show, live tab-audio share, mic announce, guest queue with voting, host handoff, late join at the exact current position.
 
 ## How it works
 
@@ -55,7 +55,7 @@ flowchart LR
 2. **Shared timeline.** The room stores one number: the song started at server time S. Position = server now − S, so play, pause, seek and late join all follow from it.
 3. **Precise start.** Each device decodes the whole file (or its stems) first, then schedules playback on the **audio clock** at S converted to local time, minus the browser-reported output latency.
 4. **Drift.** Every 2 s each device compares expected and actual position: under 40 ms it nudges playback rate by at most 0.5 %; over 40 ms it re-seeks.
-5. **Orchestra (A).** The server sends the song to the Demucs service, caches the four stems by SHA-256, and assigns stems to devices by room position. Stems start at the same scheduled instant through one shared anchor, so drift correction moves them together.
+5. **Orchestra (coming soon, switched off).** The server can send a song to the Demucs service, cache the four stems by SHA-256 and assign stems to devices by room position, starting all stems from one shared anchor so drift correction moves them together.
 6. **Auto-calibration (B).** The server runs one device at a time: 3 log-sweep chirps (2–8 kHz, 100 ms). The host mic records; a normalised cross-correlation finds each arrival to sub-sample precision, taking the earliest strong peak so a louder room echo does not win. Trim is set so all devices align to the host device. Score = repeat-to-repeat jitter and peak-to-sidelobe confidence.
 
 Full design: [spec.md](spec.md). Wire contract: [PROTOCOL.md](PROTOCOL.md).
@@ -88,7 +88,7 @@ How the numbers were produced and what they mean:
 - Uploads are temporary on the free Render tier (disk is ephemeral; the UI says so). Live separation is not deployed (CPU separation is slow); the demo songs are pre-separated, and separating your own songs needs the local `separator/` service.
 - No streaming from Spotify/YouTube (terms and DRM); users play their own files.
 - If the host device itself has a large output delay (e.g. Bluetooth), calibration aligns everyone to the host.
-- Each Orchestra device downloads the full mix plus its stems (~4 MB per stem); removing a stem mid-play is a hard stop and may click.
+- Orchestra mode is unfinished and hidden; it needs the local `separator/` service to separate your own songs.
 
 ## Run it
 
@@ -102,7 +102,7 @@ npm start            # http://localhost:3000 (PORT=3001 npm start to change)
 
 Open on phones with the laptop's LAN IP (`http://<ip>:3000`), same Wi-Fi or a phone hotspot (works with no internet). The microphone (auto-calibration, announce) and tab capture need **HTTPS or localhost**; a deployed Render URL has HTTPS automatically, and for a LAN demo see the `mkcert` recipe in [Live share and Announce](#live-share-and-announce).
 
-Orchestra mode works out of the box with the committed Demo library. To separate your own songs, run the local Demucs service (`separator/startup.md`) and start with `SEPARATOR_URL=http://localhost:7860 SEPARATOR_TOKEN=<secret> npm start`. Deploy steps (one Render service): [docs/deploy.md](docs/deploy.md).
+The two committed demo songs (Play tab → Demo songs) need no separator. Orchestra mode (per-device stems) is coming soon and switched off in the UI; its code can be tried by setting `ORCHESTRA_AVAILABLE = true` in `client/src/ui/Orchestra.tsx` and running the local Demucs service (`separator/startup.md`) with `SEPARATOR_URL=http://localhost:7860 SEPARATOR_TOKEN=<secret> npm start`. Deploy steps (one Render service): [docs/deploy.md](docs/deploy.md).
 
 Tests and simulator:
 
@@ -149,7 +149,7 @@ Turn on a phone hotspot (or travel router), join the laptop and all other device
 
 Host: Devices tab → **Auto-calibrate** (pause music, keep the room quiet, needs HTTPS or localhost for the mic). Each device plays a 2–8 kHz chirp three times in turn while the host's mic records; cross-correlation measures each device's real acoustic delay and sets every trim so all devices line up with the host's device (positive trim = play earlier). Each device gets a 0–100 sync score (green/amber/red) in the device list and on the radar; manual trim sliders stay as an override. Sound travel time (~3 ms per metre) is part of the measurement, so place the host device where you want the best sound. A noisy room or quiet speaker gives "low confidence" and leaves that device's trim unchanged.
 
-### Orchestra mode
+### Orchestra mode (coming soon, switched off)
 
 1. **Stem source.** *Separate this song into stems* (Orchestra tab, host) sends the track to the Demucs service in `separator/`, or pick a song from the **Demo library** (pre-separated, instant; see `server/demo/README.md` and `docs/deploy.md` section C).
 2. **Configure the separator** on the SyncWave server with `SEPARATOR_URL` and `SEPARATOR_TOKEN`. Unset means separation is disabled (the UI says so). Results are cached by the track's SHA-256.
@@ -167,7 +167,6 @@ Host: Devices tab → **Auto-calibrate** (pause music, keep the room quiet, need
 | Join | QR scan to playing, 5 trials | under 10 s |
 | Browsers | Chrome Android, Safari iOS, Chrome and Firefox desktop | join, play, pause, seek, next |
 | Spatial | assign left/right/centre | separate channels audible |
-| Orchestra | 4 phones, vocals and drums on different phones | each phone plays only its stem, in sync |
 | Hotspot | phone hotspot, no internet | all of the above still work |
 
 ## Credits and licences

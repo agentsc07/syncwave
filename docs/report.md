@@ -1,6 +1,6 @@
 # SyncWave: report
 
-**Applied AI & Data Science project.** SyncWave plays one audio stream on many phones and laptops at once, in the browser, and uses two data-driven features to make the result better than plain synchronisation: source separation (Demucs) and acoustic delay measurement.
+**Applied AI & Data Science project.** SyncWave plays one audio stream on many phones and laptops at once, in the browser, and uses data-driven features to make the result better than plain synchronisation: acoustic delay measurement (auto-calibration), beat-synced lights, and, as a prototype that is switched off for now, source separation (Demucs).
 
 ## Problem
 
@@ -10,7 +10,7 @@ A room of people carries many small speakers but no easy way to use them togethe
 
 **Synchronisation (baseline).** Each device estimates its offset from a server clock with NTP-style ping exchanges (20 pings, keep the lowest-RTT 30 %, median; repeated every 3 s). The room stores a single fact, "the track started at server time S", so position is server-now − S. Each device decodes the file fully, then schedules playback on the Web Audio clock at S minus the browser-reported output latency, and corrects drift every 2 s (rate nudge up to 0.5 % under 40 ms, re-seek above).
 
-**Feature A: Orchestra mode (source separation).** Demucs htdemucs splits a song into four stems (vocals, drums, bass, other); the server can call a local separator service (cached by content hash), and assigns stems to devices by their positions on a room map. All stems of a device start at one scheduled instant from a shared anchor, so the sync model and drift correction are unchanged. The deployed version ships two pre-separated CC BY demo songs and does not run Demucs live, because CPU separation of a full song takes minutes; separating your own songs runs locally.
+**Feature A: Orchestra mode (source separation): prototype, switched off in the UI ("coming soon").** Demucs htdemucs splits a song into four stems (vocals, drums, bass, other); the server can call a local separator service (cached by content hash), and assigns stems to devices by their positions on a room map. All stems of a device start at one scheduled instant from a shared anchor, so the sync model and drift correction are unchanged. The deployed version ships two pre-separated CC BY demo songs and does not run Demucs live, because CPU separation of a full song takes minutes; separating your own songs runs locally.
 
 **Feature B: acoustic auto-calibration (signal processing).** The browser cannot see how late a speaker actually sounds. The server therefore asks each device in turn to play a 100 ms log-sweep chirp (2–8 kHz, Hann-windowed, three repeats) while the host's microphone records with echo cancellation and gain control off. A normalised cross-correlation (FFT) of the recording against the known chirp gives each arrival time, refined to sub-sample precision by parabolic interpolation. The earliest strong peak is used so a louder room reflection does not win; confidence is the peak-to-sidelobe ratio; the delay is the median of accepted repeats. Each trim is set relative to the host device (so the microphone's own latency cancels), and a 0–100 sync score combines repeat jitter and confidence.
 

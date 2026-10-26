@@ -7,7 +7,7 @@ export const LIVE_CHUNK_MS = 20;
 export const DUCK_GAIN = 0.25;
 export const LIVE_BUFFER = {
   share: { def: 1500, min: 800, max: 3000 },
-  announce: { def: 250, min: 100, max: 1000 },
+  announce: { def: 700, min: 300, max: 2000 },
 } as const;
 /** Chunks whose planned start is within this of the previous chunk's end are butted up seamlessly. */
 export const SNAP_S = 0.006;
@@ -147,4 +147,13 @@ export class LiveScheduler {
     this.stats.played++;
     return { action: 'play', when, offsetSec };
   }
+}
+
+/** Peak amplitude 0..1 of an encoded live frame (for level meters). */
+export function framePeak(buf: ArrayBuffer): number {
+  if (buf.byteLength <= LIVE_HEADER_BYTES) return 0;
+  const dv = new DataView(buf);
+  let m = 0;
+  for (let o = LIVE_HEADER_BYTES; o + 1 < buf.byteLength; o += 2) m = Math.max(m, Math.abs(dv.getInt16(o, true)));
+  return Math.min(1, m / 32767);
 }
