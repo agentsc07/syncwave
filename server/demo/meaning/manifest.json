@@ -1,0 +1,29 @@
+{
+  "slug": "meaning",
+  "title": "Meaning - Hussalonia (70 s excerpt)",
+  "sourceFile": "01_Meaning.mp3",
+  "sha256": "459f9a1b4096d1d4b27d04b966acace49f36d3725542d3b55bbabb1149b63761",
+  "durationSec": 70.03,
+  "model": "htdemucs",
+  "stems": {
+    "vocals": {
+      "file": "vocals.mp3",
+      "sizeBytes": 1121009
+    },
+    "drums": {
+      "file": "drums.mp3",
+      "sizeBytes": 1121009
+    },
+    "bass": {
+      "file": "bass.mp3",
+      "sizeBytes": 1121009
+    },
+    "other": {
+      "file": "other.mp3",
+      "sizeBytes": 1121009
+    }
+  },
+  "license": "CC BY 4.0",
+  "author": "Hussalonia",
+  "source": "https://archive.org/details/The_Public_Domain_EP"
+}

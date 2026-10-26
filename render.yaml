@@ -15,10 +15,9 @@ services:
       - key: NODE_VERSION
         value: "20"
       # Render injects PORT (10000); the server reads it, nothing to set.
-      - key: SEPARATOR_URL     # https://<hf-user>-<space>.hf.space (no trailing slash)
-        sync: false
-      - key: SEPARATOR_TOKEN   # same secret as the Hugging Face Space
-        sync: false
+      # Live stem separation is NOT part of the deployed version (Orchestra mode uses the
+      # pre-separated demo songs in server/demo). To run the Demucs service yourself, see
+      # separator/README.md and set SEPARATOR_URL / SEPARATOR_TOKEN locally.
       - key: MAX_UPLOAD_MB     # total uploads kept on disk before oldest are evicted
         value: "500"
       - key: UPLOAD_TTL        # seconds an uploaded file lives (0 = until room ends)

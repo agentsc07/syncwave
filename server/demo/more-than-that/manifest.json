@@ -1,0 +1,29 @@
+{
+  "slug": "more-than-that",
+  "title": "More Than That - Hussalonia (70 s excerpt)",
+  "sourceFile": "03_More_Than_That.mp3",
+  "sha256": "7256fa539a8bf839acc3a2bee185835a75ef400e1c05cc19f1afb6dcc48de796",
+  "durationSec": 70.03,
+  "model": "htdemucs",
+  "stems": {
+    "vocals": {
+      "file": "vocals.mp3",
+      "sizeBytes": 1121009
+    },
+    "drums": {
+      "file": "drums.mp3",
+      "sizeBytes": 1121009
+    },
+    "bass": {
+      "file": "bass.mp3",
+      "sizeBytes": 1121009
+    },
+    "other": {
+      "file": "other.mp3",
+      "sizeBytes": 1121009
+    }
+  },
+  "license": "CC BY 4.0",
+  "author": "Hussalonia",
+  "source": "https://archive.org/details/The_Public_Domain_EP"
+}
