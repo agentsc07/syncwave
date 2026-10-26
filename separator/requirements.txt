@@ -1,0 +1,7 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+demucs==4.0.1
+numpy==1.26.4
+soundfile==0.12.1
+# torch / torchaudio (CPU wheels) are installed separately, see Dockerfile and README
