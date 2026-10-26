@@ -46,3 +46,11 @@
 3. Deploy: Hugging Face Space + Render (docs/deploy.md), then fill the live links in README.
 4. Real-device evaluation (docs/eval-protocol.md) -> fill 'pending' cells.
 5. Supply 1-2 royalty-free songs for the demo library.
+
+### 2026-10-26 — Wrap-up for deployment
+- Decision (user): deployed version = ONE Render service. Live Demucs dropped from deploy; separator/ kept as run-locally. render.yaml has no SEPARATOR_* vars; docs/deploy.md rewritten (HF Space path kept as untested optional).
+- Demo music: ccMixter downloads returned 403 and a browser-header retry was denied by the permission classifier (bot-check circumvention), so I did NOT bypass it. Used the Internet Archive instead: 'The Public Domain EP' by Hussalonia (uploaded by the artist, CC BY 4.0): 'Meaning' and 'More Than That', 70 s excerpts, separated locally with Demucs htdemucs, attribution + 'changes made' recorded in server/demo/README.md and README credits. Rejected Archive.org items that looked like mislabeled third-party uploads (major-label artists tagged CC0/CC-BY): Archive license tags are not trustworthy. Stems not listened to by me (levels differ per stem).
+- Browser pass (Playwright: Chromium desktop + iPhone-14 emulation, WebKit iPhone-14 emulation): 8 bugs fixed (seek bar dead for uploads, WebKit sliders invisible, tab wrap, lights hint invisible, space-map overlap, radar labels, connection-loss detection + 12 s watchdog, hardcoded port). Details: docs/browser-test.md. Headless cannot verify real audio, real clock-sync accuracy, real mic calibration, real iOS behaviour.
+- Final verification: 9 server test files pass; production build ok; scripts/smoke.mjs PASS against local prod server (port 3700); /api/demo lists 2 songs.
+- Secret/junk scan: no secrets tracked (pattern grep over tracked files), only .env.example placeholders, no personal paths/emails in files, 100 files / 9.4 MB. Moved an iCloud duplicate `node_modules 2` into _holding/ and gitignored `* 2`.
+- OPEN before going public: all 15+ commits are authored `Sai-Charan-CV <saicharancv@iisc.ac.in>` (git config). Not rewritten without the user's say-so.
