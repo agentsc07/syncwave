@@ -17,6 +17,7 @@ const HELP = `Usage: npm run sim -- [options]
   --server-url URL   server base URL (default: spawn ../server on a free port)
   --realtime         wait real time instead of compressing sim time
   --max-median MS (10)  --max-worst MS (20)   pass thresholds
+  --json FILE        write summary JSON (median_ms, p95_ms, worst_ms, drift_ms, spread_*) for eval/analyze.py --sim-json
 `;
 const args = process.argv.slice(2);
 const opt = (name, def) => {
@@ -132,6 +133,18 @@ async function main() {
   console.log(`server: room exists=${st.exists}, devices in last state=${seenByServer ?? 'n/a'}/${cfg.devices}`);
   const okM = med < cfg.maxMedian, okW = worst < cfg.maxWorst;
   console.log(`\nOFFSET vs ideal       median ${med.toFixed(2)} ms (target <${cfg.maxMedian}) ${okM ? 'PASS' : 'FAIL'}   worst ${worst.toFixed(2)} ms (target <${cfg.maxWorst}) ${okW ? 'PASS' : 'FAIL'}`);
+  const jsonPath = opt('json', null);
+  if (jsonPath) {
+    const sorted = [...abs].sort((a, b) => a - b);
+    const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))];
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(jsonPath, JSON.stringify({
+      devices: cfg.devices, duration_s: cfg.duration, jitter_ms: cfg.jitter,
+      median_ms: med, p95_ms: p95, worst_ms: worst,
+      drift_ms: Math.max(...lastMin), // worst |offset| in the final 60 s
+      spread_median_ms: median(spread), spread_worst_ms: Math.max(...spread),
+    }, null, 2));
+  }
   devs.forEach((d) => d.close());
   return okM && okW ? 0 : 1;
 }
