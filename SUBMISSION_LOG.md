@@ -6,7 +6,7 @@
 - [x] Step 1B: acoustic auto-calibration (built + unit-tested; NOT yet tried on real devices)
 - [ ] Step 1A: Orchestra mode (Demucs stems)
 - [ ] Step 2: product polish (landing/join flow, status, error states, PWA)
-- [ ] Step 3: evaluation protocol + analysis script + side-by-side numbers
+- [~] Step 3: protocol + analysis script DONE (synthetic tests only); real-device numbers need the user's hardware
 - [ ] Step 4: deploy (Render + Hugging Face Space for Demucs)
 - [ ] Step 5: README rewrite, docs/report.md, docs/demo-script.md, links at top
 
@@ -25,3 +25,8 @@
 - Decision: trims are aligned to the **host device** (not the slowest) so the host mic's constant input latency cancels. trim_i = delay_i - delay_host. Consequence: if the host itself is a Bluetooth output, everything aligns to it.
 - Known gaps: manual trim slider range is +-300 ms but auto trims can reach +-2000; nothing tested on real browsers/rooms/iOS.
 - Note: GitHub push still blocked (classifier denied `gh repo create --push`); commits are local only.
+
+### 2026-10-26 — Step 3 tooling
+- Added docs/eval-protocol.md, eval/analyze.py (+ make_test_signal.py, tests: 5 pass). Validated only on synthetic recordings; real recordings may need `--threshold-rel` tuning (not exposed on CLI yet).
+- analyze.py `--sim-json` expects keys median_ms/p95_ms/worst_ms/drift_ms, but the sim prints no JSON yet -> TODO add `--json` output to sim.
+- Moved eval/__pycache__ dirs into _holding/pycache/ (rm was blocked, and rule is move-not-delete).
