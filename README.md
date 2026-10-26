@@ -7,13 +7,13 @@
 | What | Link | Status |
 | --- | --- | --- |
 | Web app (Render, free tier) | _not deployed yet_ | pending, see [docs/deploy.md](docs/deploy.md) |
-| Stem separation service (Hugging Face Space, Demucs) | _not deployed yet_ | pending, see [docs/deploy.md](docs/deploy.md) |
+| Stem separation (Demucs) | not deployed: runs locally (`separator/`); the live app uses pre-separated demo songs | by design |
 | Source | `github.com/agentsc07/syncwave` (private) | local commits only, not pushed yet |
 | One-page report | [docs/report.md](docs/report.md) | done |
 | 2-minute demo script | [docs/demo-script.md](docs/demo-script.md) | done |
 | Real-device evaluation protocol | [docs/eval-protocol.md](docs/eval-protocol.md) | done, not yet run on hardware |
 
-This table is the single place to update when the deploys are live.
+This table is the single place to update when the deploy is live. The deployed version is one Render service.
 
 ## The problem
 
@@ -23,7 +23,7 @@ One phone speaker cannot fill a room, Bluetooth speakers play one at a time, and
 
 - **Zero install.** Open a link or scan a QR code; any modern browser becomes a speaker. Room code, join under 10 s, installable as a PWA.
 - **Synced playback.** Every device starts the same pre-loaded audio at the same instant and corrects drift while it plays.
-- **AI feature A: Orchestra mode.** Demucs (htdemucs) splits a song into vocals / drums / bass / other. Each phone plays a different stem, assigned by where it sits in the room, all in sync. "Everyone plays everything" is the fallback.
+- **AI feature A: Orchestra mode.** Demucs (htdemucs) splits a song into vocals / drums / bass / other. Each phone plays a different stem, assigned by where it sits in the room, all in sync. "Everyone plays everything" is the fallback. The deployed app ships two pre-separated demo songs; separating your own songs runs locally.
 - **AI/data feature B: acoustic auto-calibration.** Each device plays a chirp in turn; the host's microphone records; cross-correlation measures each device's real acoustic delay and sets its trim automatically. Each device gets a 0–100 sync score. This replaces dragging a trim slider for a Bluetooth speaker.
 - Also: sync radar (live offset per device), spatial mode (left/right/centre channels), beat light show, live tab-audio share, mic announce, guest queue with voting, host handoff, late join at the exact current position.
 
@@ -41,7 +41,7 @@ flowchart LR
     T[Reference clock]
     U[Uploads / stem cache]
   end
-  subgraph AI["Separator (HF Space, CPU)"]
+  subgraph AI["Separator (run locally)"]
     M[Demucs htdemucs<br/>4 stems]
   end
   Browser <-->|control + pings| R
@@ -85,7 +85,7 @@ How the numbers were produced and what they mean:
 
 - Nothing has been run in a real browser or on a phone yet; the UI, PWA, service worker, audio capture and calibration are covered by builds, Node tests with fake audio contexts, and curl only.
 - iPhone silent mode cannot be detected by web APIs; the app shows a hint.
-- Uploads are temporary on the free Render tier (disk is ephemeral; the UI says so). Free Hugging Face Spaces sleep when idle, and CPU separation of a 4-minute song may take 5–10 minutes, so demo songs are pre-separated.
+- Uploads are temporary on the free Render tier (disk is ephemeral; the UI says so). Live separation is not deployed (CPU separation is slow); the demo songs are pre-separated, and separating your own songs needs the local `separator/` service.
 - No streaming from Spotify/YouTube (terms and DRM); users play their own files.
 - If the host device itself has a large output delay (e.g. Bluetooth), calibration aligns everyone to the host.
 - Each Orchestra device downloads the full mix plus its stems (~4 MB per stem); removing a stem mid-play is a hard stop and may click.
@@ -102,7 +102,7 @@ npm start            # http://localhost:3000 (PORT=3001 npm start to change)
 
 Open on phones with the laptop's LAN IP (`http://<ip>:3000`), same Wi-Fi or a phone hotspot (works with no internet). The microphone (auto-calibration, announce) and tab capture need **HTTPS or localhost**; a deployed Render URL has HTTPS automatically, and for a LAN demo see the `mkcert` recipe in [Live share and Announce](#live-share-and-announce).
 
-Orchestra mode needs the separator: `SEPARATOR_URL=https://<space>.hf.space SEPARATOR_TOKEN=<secret> npm start` (details under [Orchestra mode](#orchestra-mode)). Without it the rest of the app works and the Demo library is available. Deploy steps: [docs/deploy.md](docs/deploy.md).
+Orchestra mode works out of the box with the committed Demo library. To separate your own songs, run the local Demucs service (`separator/startup.md`) and start with `SEPARATOR_URL=http://localhost:7860 SEPARATOR_TOKEN=<secret> npm start`. Deploy steps (one Render service): [docs/deploy.md](docs/deploy.md).
 
 Tests and simulator:
 
@@ -111,7 +111,7 @@ cd server && for t in test/*.test.js; do node --test $t; done
 npm run sim -- --devices 5 --duration 600 --jitter 10 --json sim.json
 ```
 
-Repository map: `server/` (rooms, clock, uploads, separator client, calibration state machine), `client/` (React + Web Audio engine), `separator/` (Demucs FastAPI service for a Hugging Face Docker Space), `sim/` (fake-latency device simulator), `eval/` (recording analysis), `docs/`.
+Repository map: `server/` (rooms, clock, uploads, separator client, calibration state machine), `client/` (React + Web Audio engine), `separator/` (Demucs FastAPI service, run locally), `sim/` (fake-latency device simulator), `eval/` (recording analysis), `docs/`.
 
 ---
 
@@ -169,3 +169,7 @@ Host: Devices tab → **Auto-calibrate** (pause music, keep the room quiet, need
 | Spatial | assign left/right/centre | separate channels audible |
 | Orchestra | 4 phones, vocals and drums on different phones | each phone plays only its stem, in sync |
 | Hotspot | phone hotspot, no internet | all of the above still work |
+
+## Credits and licences
+
+Demo songs ("Meaning", "More Than That") are excerpts, modified (cut and split into stems with Demucs), from *The Public Domain EP* by **Hussalonia**, licensed **CC BY 4.0**: <https://archive.org/details/The_Public_Domain_EP>. Details in [server/demo/README.md](server/demo/README.md). Stem separation uses [Demucs](https://github.com/facebookresearch/demucs) (htdemucs).
