@@ -13,3 +13,6 @@ __pycache__/
 .pytest_cache/
 eval/results/*.png
 *.wav
+# iCloud sync-conflict duplicates ("name 2")
+* 2
+* 2.*
