@@ -1,0 +1,25 @@
+# Render Blueprint: one free web service serving the API, WebSocket and built client.
+# Free tier: sleeps after ~15 min idle (cold start ~50 s), ephemeral disk (uploads vanish on restart),
+# single instance only (rooms live in memory), WebSockets supported.
+services:
+  - type: web
+    name: syncwave
+    runtime: node
+    plan: free
+    region: oregon            # pick the region nearest your users (frankfurt, singapore, ...)
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Render injects PORT (10000); the server reads it, nothing to set.
+      - key: SEPARATOR_URL     # https://<hf-user>-<space>.hf.space (no trailing slash)
+        sync: false
+      - key: SEPARATOR_TOKEN   # same secret as the Hugging Face Space
+        sync: false
+      - key: MAX_UPLOAD_MB     # total uploads kept on disk before oldest are evicted
+        value: "500"
+      - key: UPLOAD_TTL        # seconds an uploaded file lives (0 = until room ends)
+        value: "21600"

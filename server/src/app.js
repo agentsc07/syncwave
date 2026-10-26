@@ -28,6 +28,12 @@ export function createApp({
   demoDir = process.env.DEMO_DIR || path.join(here, '..', 'demo'),
   // {url, token, pollMs, ...}; defaults to env SEPARATOR_URL / SEPARATOR_TOKEN. Empty url = separation disabled.
   separator: separatorOpts = {},
+  // Hosting limits (env-configurable): total uploads on disk, file lifetime, per-IP rate limits, ws keepalive.
+  maxUploadTotalMb = Number(process.env.MAX_UPLOAD_MB) || 500,
+  uploadTtlSec = process.env.UPLOAD_TTL !== undefined ? Number(process.env.UPLOAD_TTL) : 6 * 3600, // 0 = keep until room ends
+  uploadsPerWindow = Number(process.env.UPLOAD_RATE) || 30, // uploads per IP per 10 min
+  roomsPerMinute = Number(process.env.ROOM_RATE) || 120, // room creations per IP per minute
+  heartbeatMs = 25000,
 } = {}) {
   fs.mkdirSync(uploadDir, { recursive: true });
   const files = new Map(); // trackId -> {file, mime, roomId}
@@ -66,6 +72,40 @@ export function createApp({
       if (st !== 'playing' && st !== 'scheduled') { room.setCurrentTrack(trackId); room.broadcast(); }
     },
   };
+
+  // Evict oldest uploads when over the disk cap or past the TTL. Stems/demo files are not touched.
+  const evictFile = (id) => {
+    const f = files.get(id);
+    if (!f) return;
+    fs.rm(f.file, { force: true }, () => {});
+    files.delete(id);
+  };
+  const enforceUploadLimits = (keepId) => {
+    const t = Date.now();
+    if (uploadTtlSec > 0) for (const [id, f] of files) if (id !== keepId && t - f.at > uploadTtlSec * 1000) evictFile(id);
+    let total = 0;
+    for (const f of files.values()) total += f.size;
+    for (const [id, f] of files) { // Map iterates in insertion (= upload) order, oldest first
+      if (total <= maxUploadTotalMb * 1024 * 1024) break;
+      if (id === keepId) continue;
+      total -= f.size;
+      evictFile(id);
+    }
+  };
+  const ttlTimer = setInterval(() => enforceUploadLimits(), 60000);
+  ttlTimer.unref();
+
+  // Tiny fixed-window per-IP limiter (no dependency).
+  const hits = new Map();
+  const limited = (key, limit, windowMs) => {
+    const t = Date.now();
+    const h = hits.get(key);
+    if (!h || t - h.start > windowMs) { hits.set(key, { start: t, n: 1 }); return false; }
+    return ++h.n > limit;
+  };
+  const hitsTimer = setInterval(() => { const t = Date.now(); for (const [k, h] of hits) if (t - h.start > 600000) hits.delete(k); }, 60000);
+  hitsTimer.unref();
+
   const rooms = new RoomManager({ clock, hooks });
   rooms.onRoomDeleted = (room) => {
     for (const id of room.tracks.keys()) {
@@ -77,6 +117,10 @@ export function createApp({
 
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', 1); // Render terminates TLS; req.ip / req.protocol come from X-Forwarded-*
+  app.get('/healthz', (req, res) => {
+    res.set('Cache-Control', 'no-store').json({ ok: true, uptime: Math.round(process.uptime()), rooms: rooms.rooms?.size ?? undefined });
+  });
   app.use((req, res, next) => {
     res.set('Access-Control-Allow-Origin', '*');
     res.set('Access-Control-Allow-Headers', 'x-filename, x-token, content-type');
@@ -90,6 +134,7 @@ export function createApp({
   });
 
   app.post('/api/rooms', (req, res) => {
+    if (limited('room:' + req.ip, roomsPerMinute, 60000)) return res.status(429).json({ error: 'too many rooms, slow down' });
     const room = rooms.create();
     res.json({ roomId: room.roomId, hostToken: room.hostToken });
   });
@@ -102,6 +147,7 @@ export function createApp({
     const room = rooms.get(req.params.roomId);
     if (!room) return res.status(404).json({ error: 'room not found' });
     if (!room.canUpload(req.get('x-token'))) return res.status(403).json({ error: 'bad token' });
+    if (limited('up:' + req.ip, uploadsPerWindow, 600000)) return res.status(429).json({ error: 'too many uploads, try again later' });
     const declared = Number(req.get('content-length'));
     if (declared > MAX_UPLOAD) return res.status(413).json({ error: 'too large' });
 
@@ -132,7 +178,8 @@ export function createApp({
       if (failed) return;
       if (size === 0) { fs.rm(file, { force: true }, () => {}); return res.status(400).json({ error: 'empty body' }); }
       if (!rooms.get(room.roomId)) { fs.rm(file, { force: true }, () => {}); return res.status(404).json({ error: 'room gone' }); }
-      files.set(trackId, { file, mime, roomId: room.roomId });
+      files.set(trackId, { file, mime, roomId: room.roomId, size, at: Date.now() });
+      enforceUploadLimits(trackId);
       room.addTrack({ id: trackId, name, sizeBytes: size });
       res.json({ trackId });
     });
@@ -160,7 +207,15 @@ export function createApp({
 
   // Static client + SPA fallback (checked per request so a later build is picked up).
   const indexHtml = path.join(clientDist, 'index.html');
-  const serveStatic = express.static(clientDist);
+  const serveStatic = express.static(clientDist, {
+    setHeaders(res, file) {
+      const base = path.basename(file);
+      if (/[\\/]assets[\\/]/.test(file)) res.set('Cache-Control', 'public, max-age=31536000, immutable'); // hashed filenames
+      else if (base === 'index.html' || base === 'sw.js' || base === 'service-worker.js' || base === 'registerSW.js') res.set('Cache-Control', 'no-cache');
+      else res.set('Cache-Control', 'public, max-age=3600');
+      if (base === 'manifest.webmanifest' || base === 'manifest.json') res.type('application/manifest+json');
+    },
+  });
   const reserved = /^\/(api|media|ws)(\/|$)/;
   app.use((req, res, next) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return next();
@@ -169,7 +224,7 @@ export function createApp({
   });
   app.get('*', (req, res, next) => {
     if (reserved.test(req.path) || !fs.existsSync(indexHtml)) return next();
-    res.sendFile(indexHtml);
+    res.set('Cache-Control', 'no-cache').sendFile(indexHtml);
   });
 
   const server = tls ? https.createServer(tls, app) : http.createServer(app);
@@ -179,7 +234,20 @@ export function createApp({
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   });
 
+  // Keepalive: Render's proxy drops idle sockets, and phones vanish without a close frame.
+  // Protocol-level ping every heartbeatMs; any frame back (pong or app message) counts as alive.
+  const beat = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (ws.isAlive === false) { ws.terminate(); continue; }
+      ws.isAlive = false;
+      try { ws.ping(); } catch {}
+    }
+  }, heartbeatMs);
+  beat.unref();
+
   wss.on('connection', (ws) => {
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
     let room = null, deviceId = null;
     const conn = {
       send: (o) => { if (ws.readyState === 1) ws.send(JSON.stringify(o)); },
@@ -188,6 +256,7 @@ export function createApp({
       sendBinary: (buf) => { if (ws.readyState === 1 && ws.bufferedAmount < 512 * 1024) ws.send(buf, { binary: true }); },
     };
     ws.on('message', (data, isBinary) => {
+      ws.isAlive = true;
       if (isBinary) { if (room) room.relayLive(deviceId, data); return; }
       const t1 = clock();
       let msg;
@@ -222,6 +291,7 @@ export function createApp({
     listen: (port = 3000, host) => new Promise((resolve) => server.listen(port, host, () => resolve(server.address().port))),
     close: () => new Promise((resolve) => {
       rooms.stop();
+      clearInterval(ttlTimer); clearInterval(hitsTimer); clearInterval(beat);
       separator.close();
       for (const c of wss.clients) c.terminate();
       server.close(() => resolve());

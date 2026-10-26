@@ -23,6 +23,8 @@ npm start
 ```
 Demo songs (no separator needed): put stems in `server/demo/<slug>/`, see `server/demo/README.md`. `DEMO_DIR` overrides the folder.
 
+**Deploy (Render + Hugging Face):** see `docs/deploy.md`. Env vars: `.env.example`. Health check `GET /healthz`; post-deploy check `node scripts/smoke.mjs <url>`.
+
 **Stop:** Ctrl+C. If the port is stuck: `lsof -nP -iTCP:3000 -sTCP:LISTEN` then `kill <PID>`.
 
 **Tests:** `npm -w server test` · simulation: `npm run sim -- --devices 5 --duration 600 --jitter 10`
