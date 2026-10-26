@@ -1,7 +1,8 @@
 # SUBMISSION_LOG
 
 ## Task list
-- [x] Step 0: read docs, run sim + tests, git init, .gitignore, first commit, private GitHub repo
+- [x] Step 0: read docs, run sim + tests, git init, .gitignore, first commit
+- [ ] Step 0b: create private GitHub repo agentsc07/syncwave and push (BLOCKED: classifier denied; waiting on user)
 - [x] Step 1B: acoustic auto-calibration (built + unit-tested; NOT yet tried on real devices)
 - [ ] Step 1A: Orchestra mode (Demucs stems)
 - [ ] Step 2: product polish (landing/join flow, status, error states, PWA)
@@ -17,7 +18,7 @@
 - Fix (nothing deleted): moved the evicted `node_modules` and `main.tsx` into `_holding/`, ran a fresh `npm install`, rewrote the 5-line `main.tsx`. `_holding/` is git-ignored.
 - **Risk remains**: iCloud can evict files again, including `.git` objects. Recommend moving the project out of Desktop (e.g. `~/dev/syncwave`) or turning off Desktop & Documents sync. I have not moved it myself.
 - Decision: `.gitignore` also ignores `_holding/`, `.env*`, `*.key`.
-- Decision: GitHub repo `agentsc07/syncwave` created as **private**; will ask before making it public.
+- GitHub repo NOT created: `gh repo create agentsc07/syncwave --private --push` was denied by the auto-mode classifier. Plan is private only; will ask before making it public.
 
 ### 2026-10-26 — Step 1B calibration
 - Built chirp (log sweep 2-8 kHz, 100 ms) + FFT cross-correlation with sub-sample interpolation; host device is the mic; devices play 3 chirps each in turn; server state machine applies trims. Tests: 6 server test files pass, client builds.
