@@ -1,5 +1,6 @@
 import { ClockSync } from './clock';
 import { AudioEngine } from './engine';
+import { CalibrationClient } from './calibrationclient';
 import { startCapture, type CaptureHandle } from './livecapture';
 import { LIVE_BUFFER } from './livemath';
 import type {
@@ -54,6 +55,7 @@ export class Session {
   readonly deviceId: string;
   readonly clock = new ClockSync();
   readonly engine: AudioEngine;
+  readonly calib: CalibrationClient;
 
   state: RoomState | null = null;
   isHost = false;
@@ -91,6 +93,7 @@ export class Session {
     this.url =
       opts.wsUrl ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
     this.engine = new AudioEngine(() => this.clock.serverNow());
+    this.calib = new CalibrationClient({ deviceId: this.deviceId, engine: this.engine, send: (m) => this.send(m), changed: () => this.emit() });
     this.clock.onUpdate(() => {
       // once clock is calibrated (and on every refinement) re-schedule
       this.applyEngine();
@@ -136,6 +139,7 @@ export class Session {
     }
     this.ws = null;
     this.stopCapture();
+    this.calib.dispose();
     this.engine.dispose();
     this.releaseWakeLock();
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.onVisible);
@@ -177,6 +181,8 @@ export class Session {
   setTrack(trackId: string) { this.send({ type: 'setTrack', trackId }); }
   queueAdd(trackId: string) { this.send({ type: 'queueAdd', trackId }); }
   queueVote(trackId: string) { this.send({ type: 'queueVote', trackId }); }
+  startCalibration() { this.calib.start(); }
+  cancelCalibration() { this.calib.cancel(); }
   setLocalVolume(v: number) { this.engine.setLocalVolume(v); }
 
   // ---- live audio (host only) ----
@@ -352,9 +358,13 @@ export class Session {
         if (me) this.isHost = me.isHost || this.state.hostId === this.deviceId;
         this.preload();
         this.applyEngine();
+        this.calib.onState(this.state, this.isHost);
         this.emit();
         break;
       }
+      case 'calibrateStep':
+        this.calib.onStep(m);
+        break;
       case 'error':
         this.lastError = m.message;
         if (this.liveWanted && !this.liveConfirmed && /^live/.test(m.message)) { this.liveError = m.message; this.stopCapture(); }

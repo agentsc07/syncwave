@@ -7,6 +7,7 @@ import QrJoin from './QrJoin';
 import Radar from './Radar';
 import SpatialMap from './SpatialMap';
 import LightShow from './LightShow';
+import CalibratePanel, { ScoreBadge } from './Calibrate';
 
 type Tab = 'play' | 'radar' | 'space' | 'people';
 
@@ -286,6 +287,8 @@ function TrackRow({ t, idx, session, isHost }: { t: Track; idx?: number; session
 function People({ session, state, isHost, self }: { session: Session; state: RoomState; isHost: boolean; self?: Device }) {
   const sorted = useMemo(() => [...state.devices].sort((a, b) => Number(b.connected) - Number(a.connected)), [state.devices]);
   return (
+    <>
+    <CalibratePanel session={session} state={state} isHost={isHost} />
     <ul className="list devices">
       {sorted.map((d) => {
         const mine = d.id === self?.id;
@@ -300,10 +303,11 @@ function People({ session, state, isHost, self }: { session: Session; state: Roo
               {d.isHost && <em>host</em>}
               <span className="chan">{d.channel}</span>
               <span className="mono">{off != null ? `${off >= 0 ? '+' : ''}${off.toFixed(1)}ms` : '--'}</span>
+              <ScoreBadge score={d.syncScore} />
               {isHost && !mine && <button className="btn sm danger" onClick={() => session.send({ type: 'kick', deviceId: d.id })}>Kick</button>}
             </div>
             {canTrim && (
-              <label className="trim"><span>Trim</span>
+              <label className="trim"><span>Manual trim</span>
                 <input type="range" min={-300} max={300} step={1} value={d.trimMs}
                   onChange={(e) => session.send(isHost ? { type: 'setTrim', deviceId: d.id, ms: +e.target.value } : { type: 'setTrimSelf', ms: +e.target.value })} />
                 <span className="mono">{d.trimMs > 0 ? '+' : ''}{d.trimMs}ms</span></label>
@@ -312,5 +316,6 @@ function People({ session, state, isHost, self }: { session: Session; state: Roo
         );
       })}
     </ul>
+    </>
   );
 }

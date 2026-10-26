@@ -41,7 +41,7 @@ export default function Radar({ devices, selfId, big }: { devices: Device[]; sel
               <circle r={ok ? 9 : 7} className="halo" />
               <circle r="5.5" />
               <text y="-13" textAnchor="middle" className="dname">{d.name}{d.id === selfId ? ' (you)' : ''}</text>
-              <text y="21" textAnchor="middle" className="doff">{known ? `${d.offsetMs! >= 0 ? '+' : ''}${d.offsetMs!.toFixed(1)}ms` : '...'}</text>
+              <text y="21" textAnchor="middle" className="doff">{known ? `${d.offsetMs! >= 0 ? '+' : ''}${d.offsetMs!.toFixed(1)}ms` : '...'}{d.syncScore != null ? ` · ${d.syncScore}` : ''}</text>
             </g>
           );
         })}

@@ -305,6 +305,32 @@ export class AudioEngine {
     this.lowpass.frequency.value = ch === 'sub' ? 120 : this.ctx.sampleRate / 2;
   }
 
+  /** AudioContext time at which server time `S` (ms) should be *heard* (no output latency, no trim). */
+  ctxTimeForServer(S: number): number {
+    return (this.ctx?.currentTime ?? 0) + (S - this.serverNow()) / 1000;
+  }
+
+  /**
+   * Calibration: play `chirp` so it is audible at server time S. Same scheduling math as playback
+   * (planStart: outputLatency compensated) but NO trim, and it bypasses channel routing/volume.
+   * Returns false if S is already too close/past.
+   */
+  playChirpAt(S: number, chirp: Float32Array): boolean {
+    const ctx = this.ctx;
+    if (!ctx) return false;
+    const plan = planStart({ ctxNow: ctx.currentTime, serverNow: this.serverNow(), S, outputLatencyMs: this.outputLatencyMs, trimMs: 0, durationSec: 1e9 });
+    if (!plan || plan.offsetSec > 0) return false; // late: would be misaligned
+    const buf = ctx.createBuffer(1, chirp.length, ctx.sampleRate);
+    buf.getChannelData(0).set(chirp);
+    const src = ctx.createBufferSource();
+    const g = ctx.createGain();
+    g.gain.value = 0.7;
+    src.buffer = buf;
+    src.connect(g).connect(ctx.destination);
+    src.start(plan.when);
+    return true;
+  }
+
   get outputLatencyMs(): number {
     const c = this.ctx as any;
     if (!c) return 0;

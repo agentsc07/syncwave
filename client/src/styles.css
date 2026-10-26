@@ -130,3 +130,12 @@ input[type=range]{width:100%;accent-color:var(--acc);height:28px;background:tran
 .livepanel{border:1px solid var(--line);border-radius:12px;padding:.7rem;margin-bottom:.8rem;display:flex;flex-direction:column;gap:.5rem}
 .liverow{display:flex;gap:.5rem;flex-wrap:wrap}
 .liverow .btn{flex:1}
+.calpanel{margin:0 0 .8rem;display:flex;flex-direction:column;gap:.5rem}
+.calprog{display:flex;flex-direction:column;gap:.4rem}
+.calprog progress{width:100%;accent-color:var(--acc)}
+.score{font-size:.7rem;font-weight:700;padding:.05rem .45rem;border-radius:999px;border:1px solid var(--line);font-variant-numeric:tabular-nums}
+.score.ok{color:var(--acc);border-color:var(--acc)}.score.warn{color:var(--warn);border-color:var(--warn)}.score.bad{color:var(--bad);border-color:var(--bad)}
+.caltable{width:100%;border-collapse:collapse;font-size:.8rem}
+.caltable th{text-align:left;color:var(--dim);font-weight:500;font-size:.65rem;text-transform:uppercase;letter-spacing:.08em}
+.caltable td,.caltable th{padding:.25rem .3rem;border-bottom:1px solid var(--line)}
+.okc{color:var(--acc)}

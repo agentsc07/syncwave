@@ -14,6 +14,7 @@ export interface Device {
   offsetMs: number | null;
   driftMs: number | null;
   rtt: number | null;
+  syncScore?: number | null; // 0..100 from the last auto-calibration
   lastSeen: number;
   connected: boolean;
 }
@@ -39,6 +40,19 @@ export interface LiveInfo {
   bufferMs: number;
 }
 
+export type CalibrationError = 'mic-denied' | 'insecure-context' | 'mic-error' | 'low-confidence' | 'cancelled' | 'host-left' | 'mic-timeout' | 'result-timeout';
+export interface CalibrationResult { delayMs: number; score: number; error?: string; trimMs?: number }
+export interface CalibrationState {
+  status: 'idle' | 'running' | 'done' | 'failed';
+  phase: 'idle' | 'arming' | 'step' | 'analysing' | 'done';
+  runId: string | null;
+  step: number; // current device index (0-based); == total while analysing; -1 while arming
+  total: number;
+  deviceId: string | null; // device playing now
+  results: Record<string, CalibrationResult>;
+  error: CalibrationError | string | null;
+}
+
 export interface RoomState {
   roomId: string;
   serverTime: number;
@@ -49,6 +63,7 @@ export interface RoomState {
   volume: number;
   lights: boolean;
   live: LiveInfo | null;
+  calibration?: CalibrationState;
   hostId: string;
 }
 
@@ -74,12 +89,17 @@ export type ClientMessage =
   | { type: 'liveStart'; kind: 'share' | 'announce'; bufferMs?: number }
   | { type: 'liveStop' }
   | { type: 'liveBuffer'; ms: number }
+  | { type: 'calibrateStart' }
+  | { type: 'calibrateCancel' }
+  | { type: 'calibrateReady'; runId: string }
+  | { type: 'calibrationResult'; runId: string; results?: Record<string, { delayMs: number; score: number; error?: string }>; error?: string }
   | { type: 'leave' };
 
 export type ServerMessage =
   | { type: 'pong'; t0: number; t1: number; t2: number }
   | { type: 'joined'; deviceId: string; isHost: boolean }
   | { type: 'state' } & RoomState
+  | { type: 'calibrateStep'; runId: string; step: number; total: number; deviceId: string; times: number[]; chirp: { f0: number; f1: number; durMs: number } }
   | { type: 'error'; message: string };
 
 export type ConnectionStatus = 'connecting' | 'open' | 'reconnecting' | 'closed';

@@ -72,3 +72,7 @@ Targets: median offset under 10 ms and worst under 20 ms (spec acceptance criter
 | Bluetooth | trim slider on a Bluetooth phone | can be pulled into sync by hand |
 | Host handoff | host leaves | another device takes over, playback continues |
 | Hotspot | run over a phone hotspot with no internet | all of the above still work |
+
+
+## Auto-calibration
+Host: Devices tab -> **Auto-calibrate** (pause music first, keep the room quiet, needs HTTPS or localhost for the microphone). Each device plays a short 2-8 kHz chirp three times in turn while the host's mic records; cross-correlation measures each device's real acoustic delay and sets every trim so all devices line up with the host's device (positive trim = play earlier). Each device gets a 0-100 sync score (green/amber/red) shown in the device list and on the radar. The manual trim sliders remain as an override. Limits: sound travel time (about 3 ms per metre) is part of the measurement, so place the host device where you want the best sound; a noisy room or a quiet speaker gives a "low confidence" result, which leaves that device's trim unchanged. Covered by synthetic tests only (`server/test/calibrate.test.js`, `calibration.test.js`); not yet validated in real rooms.

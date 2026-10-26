@@ -8,6 +8,17 @@ export const LIVE_KINDS = ['share', 'announce'];
 export const LIVE_BUFFER = { share: { def: 1500, min: 800, max: 3000 }, announce: { def: 250, min: 100, max: 1000 } };
 export const LIVE_MAGIC = 1; // first byte of every binary live frame (see PROTOCOL.md)
 export const LIVE_HEADER_BYTES = 20;
+export const CALIB = {
+  repeats: 3, // chirps per device
+  leadMs: 1200, // from step start to first chirp's intended arrival
+  gapMs: 1500, // between repeats
+  tailMs: 700, // after the last repeat before the next device
+  readyTimeoutMs: 10_000, // host mic must report ready
+  resultTimeoutMs: 15_000, // host must upload results after the last step
+  chirp: { f0: 2000, f1: 8000, durMs: 100 },
+};
+export const CALIB_ERRORS = ['mic-denied', 'insecure-context', 'mic-error', 'low-confidence'];
+export const idleCalibration = () => ({ status: 'idle', runId: null, step: 0, total: 0, phase: 'idle', deviceId: null, results: {}, error: null });
 export const DEVICE_TTL_MS = 60_000;
 export const ROOM_EMPTY_TTL_MS = 10 * 60_000;
 const ID_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no I, L, O, 0, 1
@@ -25,7 +36,8 @@ export function makeRoomId() {
  * `clock` is injectable for tests.
  */
 export class Room {
-  constructor(roomId, { clock = realNow, onChange } = {}) {
+  constructor(roomId, { clock = realNow, onChange, calib } = {}) {
+    this.calib = { ...CALIB, ...calib };
     this.roomId = roomId;
     this.clock = clock;
     this.hostToken = randomBytes(12).toString('hex');
@@ -39,6 +51,8 @@ export class Room {
     this.volume = 1;
     this.lights = false;
     this.live = null; // {kind, sourceId, bufferMs} | null
+    this.calibration = idleCalibration();
+    this._cal = null; // internal run: {runId, plan, timer}
     this.hostId = '';
     this.hostEverJoined = false;
     this.emptySince = this.clock();
@@ -77,6 +91,7 @@ export class Room {
       volume: this.volume,
       lights: this.lights,
       live: this.live ? { ...this.live } : null,
+      calibration: this.calibration,
       hostId: this.hostId,
     };
   }
@@ -112,6 +127,7 @@ export class Room {
   destroy() {
     clearTimeout(this.timer);
     clearTimeout(this.reportTimer);
+    clearTimeout(this._cal?.timer);
     for (const c of this.conns.values()) { try { c.close(); } catch {} }
     this.conns.clear();
   }
@@ -135,7 +151,7 @@ export class Room {
       d = {
         id: deviceId, name: String(name || 'Device').slice(0, 40), isHost: false, trimMs: 0,
         channel: 'stereo', x: 0.5, y: 0.5, readyTrackId: null, offsetMs: null, driftMs: null,
-        rtt: null, lastSeen: t, connected: true,
+        rtt: null, syncScore: null, lastSeen: t, connected: true,
       };
       this.devices.set(deviceId, d);
       this.joinedAt.set(deviceId, ++this.seq);
@@ -206,6 +222,7 @@ export class Room {
     d.connected = false;
     d.lastSeen = this.clock();
     this.stopLiveIfSource(deviceId);
+    if (this._cal && deviceId === this.hostId) this.endCalibration('failed', 'host-left');
     this.handoffIfNeeded(deviceId);
     if (this.connectedDevices().length === 0) this.emptySince = this.clock();
     this.broadcast();
@@ -218,6 +235,7 @@ export class Room {
     const d = this.devices.get(deviceId);
     if (!d) return;
     this.stopLiveIfSource(deviceId);
+    if (this._cal && deviceId === this.hostId) this.endCalibration('failed', 'host-left');
     this.handoffIfNeeded(deviceId);
     this.devices.delete(deviceId);
     this.joinedAt.delete(deviceId);
@@ -314,6 +332,7 @@ export class Room {
     switch (msg.type) {
       case 'play': {
         if (this.live?.kind === 'share') return this.error(deviceId, 'live share active');
+        if (this._cal) return this.error(deviceId, 'calibrating');
         if (!p.trackId) return this.error(deviceId, 'no track');
         const st = this.derivedStatus(t);
         if (st === 'playing' || st === 'scheduled') return;
@@ -379,6 +398,7 @@ export class Room {
       case 'liveStart': {
         if (!LIVE_KINDS.includes(msg.kind)) return this.error(deviceId, 'bad live kind');
         if (this.live) return this.error(deviceId, 'live already active');
+        if (this._cal) return this.error(deviceId, 'calibrating');
         const r = LIVE_BUFFER[msg.kind];
         const bufferMs = num(msg.bufferMs) ? clamp(Math.round(msg.bufferMs), r.min, r.max) : r.def;
         this.live = { kind: msg.kind, sourceId: deviceId, bufferMs };
@@ -398,6 +418,19 @@ export class Room {
         this.live = { ...this.live, bufferMs: clamp(Math.round(msg.ms), r.min, r.max) };
         break;
       }
+      case 'calibrateStart':
+        return this.startCalibration(deviceId);
+      case 'calibrateCancel':
+        if (this._cal) this.endCalibration('failed', 'cancelled');
+        return;
+      case 'calibrateReady':
+        if (this._cal && msg.runId === this._cal.runId && this.calibration.phase === 'arming') {
+          clearTimeout(this._cal.timer);
+          this.runStep(0);
+        }
+        return;
+      case 'calibrationResult':
+        return this.finishCalibration(msg);
       case 'kick':
         if (msg.deviceId === deviceId || !this.devices.has(msg.deviceId)) return;
         this.conns.get(msg.deviceId)?.send({ type: 'error', message: 'kicked' });
@@ -407,6 +440,90 @@ export class Room {
         return;
     }
     this.broadcast();
+  }
+
+  // ---------- acoustic auto-calibration ----------
+  // Sequence: arming (host mic opens, sends calibrateReady) -> one step per connected device (host first):
+  // server broadcasts `calibrateStep {times}` (intended acoustic arrival instants, server ms) -> that device
+  // plays a chirp at each instant while the host mic records -> analysing (host uploads calibrationResult)
+  // -> trims applied. Convention: trim = delay_i - delay_ref, ref = host device (else median); +trim = play earlier.
+  startCalibration(hostId) {
+    if (this._cal) return this.error(hostId, 'calibration already running');
+    if (this.live) return this.error(hostId, 'calibrating needs live audio stopped');
+    const st = this.derivedStatus();
+    if (st === 'playing' || st === 'scheduled') return this.error(hostId, 'pause playback before calibrating');
+    const plan = [hostId, ...this.connectedDevices().map((d) => d.id).filter((id) => id !== hostId)];
+    const runId = randomUUID();
+    this._cal = { runId, plan, timer: null };
+    this.calibration = { status: 'running', runId, step: -1, total: plan.length, phase: 'arming', deviceId: null, results: {}, error: null };
+    this._cal.timer = setTimeout(() => this.endCalibration('failed', 'mic-timeout'), this.calib.readyTimeoutMs);
+    this._cal.timer.unref?.();
+    this.broadcast();
+  }
+
+  runStep(i) {
+    const cal = this._cal;
+    if (!cal) return;
+    clearTimeout(cal.timer);
+    while (i < cal.plan.length && !this.devices.get(cal.plan[i])?.connected) {
+      this.calibration.results[cal.plan[i]] = { delayMs: 0, score: 0, error: 'disconnected' };
+      i++;
+    }
+    const c = this.calib;
+    if (i >= cal.plan.length) {
+      this.calibration = { ...this.calibration, step: cal.plan.length, phase: 'analysing', deviceId: null };
+      cal.timer = setTimeout(() => this.endCalibration('failed', 'result-timeout'), c.resultTimeoutMs);
+      cal.timer.unref?.();
+      return this.broadcast();
+    }
+    const deviceId = cal.plan[i];
+    const base = this.clock() + c.leadMs;
+    const times = Array.from({ length: c.repeats }, (_, k) => base + k * c.gapMs);
+    this.calibration = { ...this.calibration, step: i, phase: 'step', deviceId };
+    const stepMs = c.leadMs + (c.repeats - 1) * c.gapMs + c.tailMs;
+    cal.timer = setTimeout(() => this.runStep(i + 1), stepMs);
+    cal.timer.unref?.();
+    this.broadcast();
+    const m = { type: 'calibrateStep', runId: cal.runId, step: i, total: cal.plan.length, deviceId, times, chirp: c.chirp };
+    for (const conn of this.conns.values()) conn.send(m);
+  }
+
+  endCalibration(status, error = null) {
+    if (!this._cal) return;
+    clearTimeout(this._cal.timer);
+    this._cal = null;
+    this.calibration = { ...this.calibration, status, phase: status === 'done' ? 'done' : 'idle', deviceId: null, error };
+    this.broadcast();
+  }
+
+  finishCalibration(msg) {
+    const cal = this._cal;
+    if (!cal || msg.runId !== cal.runId) return;
+    if (typeof msg.error === 'string') return this.endCalibration('failed', CALIB_ERRORS.includes(msg.error) ? msg.error : 'mic-error');
+    if (this.calibration.phase !== 'analysing' || !msg.results || typeof msg.results !== 'object') return;
+    const results = { ...this.calibration.results };
+    const good = [];
+    for (const id of cal.plan) {
+      if (results[id]) continue; // already marked (disconnected)
+      const r = msg.results[id];
+      if (r && num(r.delayMs) && num(r.score) && !r.error) {
+        results[id] = { delayMs: r.delayMs, score: clamp(Math.round(r.score), 0, 100) };
+        good.push(id);
+      } else results[id] = { delayMs: 0, score: 0, error: typeof r?.error === 'string' ? r.error.slice(0, 40) : 'low-confidence' };
+    }
+    if (good.length === 0) { this.calibration = { ...this.calibration, results }; return this.endCalibration('failed', 'low-confidence'); }
+    const sorted = good.map((id) => results[id].delayMs).sort((a, b) => a - b);
+    const med = sorted.length % 2 ? sorted[sorted.length >> 1] : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2;
+    const ref = good.includes(this.hostId) ? results[this.hostId].delayMs : med;
+    for (const id of good) {
+      const trimMs = clamp(Math.round((results[id].delayMs - ref) * 10) / 10, -2000, 2000);
+      results[id].trimMs = trimMs;
+      const d = this.devices.get(id);
+      if (d) { d.trimMs = trimMs; d.syncScore = results[id].score; }
+    }
+    for (const id of cal.plan) if (!good.includes(id)) { const d = this.devices.get(id); if (d) d.syncScore = 0; }
+    this.calibration = { ...this.calibration, results };
+    this.endCalibration('done', null);
   }
 
   addVote(trackId, deviceId) {
