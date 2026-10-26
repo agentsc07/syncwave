@@ -8,3 +8,8 @@ dist/
 !.env.example
 .DS_Store
 _holding/
+__pycache__/
+*.pyc
+.pytest_cache/
+eval/results/*.png
+*.wav
