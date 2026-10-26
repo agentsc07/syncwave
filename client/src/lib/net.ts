@@ -106,6 +106,33 @@ export class Session {
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', this.onVisible);
     }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('offline', this.onOffline);
+      window.addEventListener('online', this.onOnline);
+    }
+  }
+
+  private lastRx = Date.now();
+
+  /** Browser says the network is gone: a half-open WebSocket can look "open" for minutes, so drop it now. */
+  private onOffline = () => this.forceReconnect(2000);
+  /** Network is back: do not wait for the exponential backoff. */
+  private onOnline = () => {
+    if (this.closed || this.status === 'open') return;
+    this.attempt = 0;
+    this.forceReconnect(0);
+  };
+
+  private forceReconnect(delayMs: number): void {
+    if (this.closed) return;
+    const ws = this.ws;
+    this.ws = null; // makes the old socket's onclose a no-op
+    try { ws?.close(); } catch { /* ignore */ }
+    this.clock.stop();
+    this.status = 'reconnecting';
+    this.emit();
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => this.open(), delayMs);
   }
 
   // ---- lifecycle ----
@@ -113,7 +140,11 @@ export class Session {
   connect(): void {
     this.closed = false;
     this.open();
-    this.reportTimer ??= setInterval(() => this.sendReport(), 2000);
+    this.reportTimer ??= setInterval(() => {
+      // watchdog: the clock-sync pings are answered every few seconds, so 12 s of silence means a dead link
+      if (this.status === 'open' && Date.now() - this.lastRx > 12000) { this.forceReconnect(0); return; }
+      this.sendReport();
+    }, 2000);
     this.acquireWakeLock();
   }
 
@@ -130,6 +161,10 @@ export class Session {
 
   close(): void {
     this.closed = true;
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('offline', this.onOffline);
+      window.removeEventListener('online', this.onOnline);
+    }
     if (this.retryTimer) clearTimeout(this.retryTimer);
     if (this.reportTimer) clearInterval(this.reportTimer);
     this.reportTimer = null;
@@ -302,6 +337,7 @@ export class Session {
     ws.onopen = () => {
       if (this.ws !== ws) return;
       this.attempt = 0;
+      this.lastRx = Date.now();
       this.status = 'open';
       ws.send(
         JSON.stringify({
@@ -319,6 +355,7 @@ export class Session {
       this.emit();
     };
     ws.onmessage = (ev) => {
+      this.lastRx = Date.now();
       if (typeof ev.data !== 'string') { this.engine.pushLiveFrame(ev.data as ArrayBuffer); return; }
       let m: ServerMessage;
       try {

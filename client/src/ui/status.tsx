@@ -35,7 +35,9 @@ export function SelfStatus({ session, state }: { session: Session; state: RoomSt
   const unlocked = session.engine.unlocked;
   const off = self?.offsetMs ?? null;
   const pct = session.loadStatus === 'loading' ? session.engine.loadPct : null;
-  const st = self ? deviceStatus(self, state, pct) : null;
+  const linkDown = session.status === 'reconnecting' || session.status === 'connecting';
+  // while the socket is down the room state is stale: do not keep showing a green "Ready"/"Playing"
+  const st = linkDown ? { key: 'disconnected' as StatusKey, label: 'Reconnecting' } : self ? deviceStatus(self, state, pct) : null;
   const wl = session.wakeLockActive;
   const wlSupported = typeof navigator !== 'undefined' && 'wakeLock' in navigator;
 

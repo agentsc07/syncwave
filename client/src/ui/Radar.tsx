@@ -10,6 +10,7 @@ function radius(ms: number, R: number) {
 export default function Radar({ devices, selfId, big }: { devices: Device[]; selfId: string; big?: boolean }) {
   const S = 360, C = S / 2, R = 160;
   const live = devices.filter((d) => d.connected);
+  const minR = live.length > 1 ? 30 : 12; // keep several in-sync devices apart so their labels do not overlap
   const locked = live.filter((d) => d.offsetMs != null && Math.abs(d.offsetMs) < 10).length;
   return (
     <div className={'radar' + (big ? ' big' : '')}>
@@ -32,8 +33,8 @@ export default function Radar({ devices, selfId, big }: { devices: Device[]; sel
           const known = d.offsetMs != null;
           const ang = (i / Math.max(live.length, 1)) * Math.PI * 2 - Math.PI / 2;
           const r = known ? radius(d.offsetMs!, R) : R + 10;
-          const x = C + Math.cos(ang) * Math.max(r, 12);
-          const y = C + Math.sin(ang) * Math.max(r, 12);
+          const x = C + Math.cos(ang) * Math.max(r, minR);
+          const y = C + Math.sin(ang) * Math.max(r, minR);
           const ok = known && Math.abs(d.offsetMs!) < 10;
           const cls = !known ? 'unk' : ok ? 'ok' : Math.abs(d.offsetMs!) < 25 ? 'warn' : 'bad';
           return (

@@ -110,7 +110,7 @@ input[type=range]{width:100%;accent-color:var(--acc);height:28px;background:tran
 .listener{position:absolute;left:50%;top:50%;width:34%;height:34%;transform:translate(-50%,-50%);border:1px dashed #2b3550;border-radius:50%;pointer-events:none}
 .chip{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;gap:.35rem;background:var(--panel);border:1px solid var(--acc);border-radius:99px;padding:.25rem .6rem .25rem .3rem;font-size:.75rem;cursor:grab;touch-action:none;transition:left .3s,top .3s}
 .chip.drag{transition:none;cursor:grabbing;box-shadow:0 0 18px rgba(56,248,176,.5);z-index:3}.chip.ro{cursor:default;border-color:var(--line)}
-.chip b{background:var(--acc);color:#04120c;border-radius:99px;min-width:1.5rem;height:1.5rem;display:grid;place-items:center;font-size:.7rem}
+.chip b{background:var(--acc);color:#04120c;border-radius:99px;min-width:1.5rem;height:1.5rem;padding:0 .4rem;display:grid;place-items:center;font-size:.7rem}
 .chip span{max-width:6rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* modal + qr */
@@ -121,8 +121,9 @@ input[type=range]{width:100%;accent-color:var(--acc);height:28px;background:tran
 .qrcode{font:700 2rem var(--mono);letter-spacing:.4em;margin-right:-.4em}
 
 /* lights */
-.lights{position:fixed;inset:0;z-index:100;opacity:.04;background:#000;display:grid;place-items:end center;padding:2rem}
-.lights span{color:#fff;font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;mix-blend-mode:difference}
+.lights{position:fixed;inset:0;z-index:100;display:grid;place-items:end center;padding:2rem}
+.lights .lightbg{position:absolute;inset:0;opacity:.04;background:#000}
+.lights span{position:relative;color:#fff;font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;mix-blend-mode:difference}
 .btn.on{background:var(--acc);color:#000}
 
 .livebadge{font-family:var(--mono);font-size:.65rem;letter-spacing:.15em;color:#fff;background:var(--bad);padding:.2rem .5rem;border-radius:99px;animation:livepulse 1.4s ease-in-out infinite}
@@ -233,3 +234,13 @@ input[type=range]{min-height:44px}
   .sweep{animation:none}
 }
 @media (max-width:380px){.rings{display:none}.bigcode{font-size:1.5rem}}
+
+/* cross-browser sliders: Safari rendered the native track invisible on the dark background */
+input[type=range]{-webkit-appearance:none;appearance:none;background:transparent}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;background:#3a4258}
+input[type=range]::-moz-range-track{height:6px;border-radius:3px;background:#3a4258}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:var(--acc);border:2px solid var(--bg);margin-top:-8px}
+input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:var(--acc);border:2px solid var(--bg)}
+input[type=range]:disabled{opacity:.5}
+/* keep tab labels on one line on narrow phones */
+.tabs button{white-space:nowrap;font-size:clamp(.78rem,3.6vw,1rem)}

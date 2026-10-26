@@ -180,7 +180,7 @@ function PlayPane({ session, state, isHost, roomId }: { session: Session; state:
   const allReady = !!pb.trackId && ready === connected.length;
   const playing = pb.status === 'playing' || pb.status === 'scheduled';
   const pos = pb.status === 'paused' ? pb.pausedPositionMs : playing ? Math.max(0, session.engine.getPositionMs()) : 0;
-  const dur = track?.durationMs ?? 0;
+  const dur = track?.durationMs ?? (pb.trackId ? Math.round(session.engine.decodedDurationMs(pb.trackId)) : 0); // uploads carry no server duration; use the decoded length
   const [scrub, setScrub] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
   const [err, setErr] = useState('');

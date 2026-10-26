@@ -26,7 +26,8 @@ export default function LightShow({ session, active }: { session: Session; activ
 
   if (!active || dismissed) return null;
   return (
-    <div className="lights" ref={ref} onClick={() => setDismissed(true)}>
+    <div className="lights" onClick={() => setDismissed(true)}>
+      <div className="lightbg" ref={ref} />
       <span>tap to exit lights</span>
     </div>
   );

@@ -602,6 +602,15 @@ export class AudioEngine {
     this.srcs.clear();
   }
 
+  /** Duration of a decoded track in ms (full mix, else the shortest stem), or 0 if nothing is decoded yet. */
+  decodedDurationMs(trackId: string): number {
+    const mix = this.buffers.get(trackId);
+    if (mix) return mix.duration * 1000;
+    const ds: number[] = [];
+    for (const [k, b] of this.stemBuffers) if (k.startsWith(trackId + '|')) ds.push(b.duration);
+    return ds.length ? Math.min(...ds) * 1000 : 0;
+  }
+
   /** Current track position in ms (what is being rendered now); paused position when paused. */
   getPositionMs(): number {
     if (!this.ctx) return 0;

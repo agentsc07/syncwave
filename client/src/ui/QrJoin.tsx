@@ -51,7 +51,7 @@ export default function QrJoin({ roomId, compact = false }: { roomId: string; co
       <p className="hint center">Scan with a phone camera, or open the link and enter the code.</p>
       <InviteButtons roomId={roomId} />
       <code className="linktxt">{link}</code>
-      {local && <p className="hint warnc center">You opened this page via localhost, so other devices cannot reach this link. Open the app at your computer's network address (http://&lt;ip&gt;:3000) first.</p>}
+      {local && <p className="hint warnc center">You opened this page via localhost, so other devices cannot reach this link. Open the app at your computer's network address (http://&lt;ip&gt;:{location.port || "3000"}) first.</p>}
     </div>
   );
 }
