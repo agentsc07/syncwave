@@ -2,7 +2,7 @@
 
 ## Task list
 - [x] Step 0: read docs, run sim + tests, git init, .gitignore, first commit, private GitHub repo
-- [ ] Step 1B: acoustic auto-calibration
+- [x] Step 1B: acoustic auto-calibration (built + unit-tested; NOT yet tried on real devices)
 - [ ] Step 1A: Orchestra mode (Demucs stems)
 - [ ] Step 2: product polish (landing/join flow, status, error states, PWA)
 - [ ] Step 3: evaluation protocol + analysis script + side-by-side numbers
@@ -18,3 +18,9 @@
 - **Risk remains**: iCloud can evict files again, including `.git` objects. Recommend moving the project out of Desktop (e.g. `~/dev/syncwave`) or turning off Desktop & Documents sync. I have not moved it myself.
 - Decision: `.gitignore` also ignores `_holding/`, `.env*`, `*.key`.
 - Decision: GitHub repo `agentsc07/syncwave` created as **private**; will ask before making it public.
+
+### 2026-10-26 — Step 1B calibration
+- Built chirp (log sweep 2-8 kHz, 100 ms) + FFT cross-correlation with sub-sample interpolation; host device is the mic; devices play 3 chirps each in turn; server state machine applies trims. Tests: 6 server test files pass, client builds.
+- Decision: trims are aligned to the **host device** (not the slowest) so the host mic's constant input latency cancels. trim_i = delay_i - delay_host. Consequence: if the host itself is a Bluetooth output, everything aligns to it.
+- Known gaps: manual trim slider range is +-300 ms but auto trims can reach +-2000; nothing tested on real browsers/rooms/iOS.
+- Note: GitHub push still blocked (classifier denied `gh repo create --push`); commits are local only.
