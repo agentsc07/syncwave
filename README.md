@@ -6,9 +6,9 @@
 
 | What | Link | Status |
 | --- | --- | --- |
-| Web app (Render, free tier) | _not deployed yet_ | pending, see [docs/deploy.md](docs/deploy.md) |
+| Web app (Render, free tier) | <https://syncwave-22it.onrender.com/> | live; first load after idle takes ~50 s (free tier sleeps) |
 | Stem separation (Demucs) | not deployed: runs locally (`separator/`); the live app uses pre-separated demo songs | by design |
-| Source | `github.com/agentsc07/syncwave` (private) | local commits only, not pushed yet |
+| Source | `github.com/agentsc07/syncwave` (private) | pushed; latest commits pending push |
 | One-page report | [docs/report.md](docs/report.md) | done |
 | 2-minute demo script | [docs/demo-script.md](docs/demo-script.md) | done |
 | Real-device evaluation protocol | [docs/eval-protocol.md](docs/eval-protocol.md) | done, not yet run on hardware |
