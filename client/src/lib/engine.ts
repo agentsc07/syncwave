@@ -148,6 +148,8 @@ export class AudioEngine {
   private stemLoading = new Map<string, Promise<void>>();
   private stemGains = new Map<StemName, GainNode>();
   private loading = new Map<string, Promise<void>>();
+  /** Download progress (0..100) of the track currently being fetched, for UI only. */
+  loadPct = 0;
   private localVolume = 1;
   private roomVolume = 1;
   private channel: Channel = 'stereo';
@@ -285,8 +287,14 @@ export class AudioEngine {
       if (!this.ctx) throw new Error('Web Audio unavailable');
       const res = await fetch(trackUrl);
       if (!res.ok) throw new Error(`download failed (${res.status})`);
-      const data = await res.arrayBuffer();
-      const buf = await this.ctx.decodeAudioData(data);
+      const data = await readWithProgress(res, (p) => { this.loadPct = p; });
+      this.loadPct = 100; // downloaded, now decoding
+      let buf: AudioBuffer;
+      try {
+        buf = await this.ctx.decodeAudioData(data);
+      } catch {
+        throw new Error('decode failed: this browser cannot read that audio format');
+      }
       this.buffers.set(trackId, buf);
       // keep memory bounded: current + newest 2
       if (this.buffers.size > 3) {
@@ -692,4 +700,23 @@ export class AudioEngine {
     this.driftTimer = this.beatTimer = null;
     this.ctx?.suspend().catch(() => {});
   }
+}
+
+/** Read a response body into an ArrayBuffer, reporting 0..100 when Content-Length is known. */
+async function readWithProgress(res: Response, onPct: (pct: number) => void): Promise<ArrayBuffer> {
+  const total = Number(res.headers?.get?.('content-length')) || 0;
+  if (!res.body?.getReader || !total) return res.arrayBuffer();
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value); got += value.length;
+    onPct(Math.min(99, Math.round((got / total) * 100)));
+  }
+  const out = new Uint8Array(got);
+  let o = 0;
+  for (const c of chunks) { out.set(c, o); o += c.length; }
+  return out.buffer;
 }

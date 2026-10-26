@@ -3,7 +3,8 @@ import type { Session } from '../lib/net';
 import type { Device, RoomState, Track } from '../lib/types';
 import { getHostToken, getName, makeSession, setName } from './connect';
 import { fmtTime, useRoomState, useTick } from './hooks';
-import QrJoin from './QrJoin';
+import QrJoin, { InviteButtons } from './QrJoin';
+import { SelfStatus, StatusChip, deviceStatus } from './status';
 import Radar from './Radar';
 import SpatialMap from './SpatialMap';
 import LightShow from './LightShow';
@@ -16,9 +17,11 @@ export default function RoomPage({ roomId, radarOnly }: { roomId: string; radarO
   const [session, setSession] = useState<Session | null>(null);
   const [name, setNm] = useState(getName());
   const [exists, setExists] = useState<boolean | null>(null);
+  const [offline, setOffline] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/rooms/${roomId}`).then((r) => r.json()).then((j) => setExists(!!j.exists)).catch(() => setExists(true));
+    setOffline(false);
+    fetch(`/api/rooms/${roomId}`).then((r) => r.json()).then((j) => setExists(!!j.exists)).catch(() => { setExists(true); setOffline(true); });
   }, [roomId]);
 
   useEffect(() => () => { try { session?.leave(); } catch { /* ignore */ } }, [session]);
@@ -37,20 +40,24 @@ export default function RoomPage({ roomId, radarOnly }: { roomId: string; radarO
       <main className="home gate">
         <div className="glow" />
         <div className="brand"><span className="wave"><i /><i /><i /><i /><i /></span>SyncWave</div>
-        <div className="roomtag">ROOM <b>{roomId}</b></div>
+        <h1 className="gateh">{host ? 'Your room is ready' : "You're joining"}</h1>
+        <div className="roomtag static" aria-label={`Room code ${roomId}`}>ROOM <b>{roomId}</b></div>
         {exists === false ? (
           <>
-            <p className="err">This room doesn't exist or has expired.</p>
-            <a className="btn" href="#/">Back home</a>
+            <p className="err" role="alert"><b>This room doesn't exist or has expired.</b><br />Rooms close when the host leaves for a while or the server restarts. Ask the host for a fresh code or QR.</p>
+            <a className="btn primary big" href="#/">Back home</a>
           </>
         ) : (
           <>
+            {offline && <p className="err" role="alert">Can't reach the server right now. You can still try; it will keep retrying.</p>}
             <label className="field">
               <span>Your name</span>
-              <input value={name} onChange={(e) => setNm(e.target.value)} placeholder={host ? 'Host' : 'Your name'} maxLength={24} />
+              <input value={name} onChange={(e) => setNm(e.target.value)} placeholder={host ? 'Host' : 'Your name'} maxLength={24} autoComplete="nickname" enterKeyHint="go"
+                onKeyDown={(e) => { if (e.key === 'Enter') start(); }} />
             </label>
-            <button className="btn primary big pulse" onClick={start}>Tap to start</button>
-            <p className="hint">Unlocks audio on this device. On iPhone, turn the silent switch off.</p>
+            <button className="btn primary big pulse" onClick={start}>{host ? 'Tap to start' : 'Tap to join'}</button>
+            <p className="hint">One tap unlocks audio on this device (browsers require it). On iPhone, also switch the silent switch to ring.</p>
+            <a className="linkbtn center" href="#/">Not the right room? Go back</a>
           </>
         )}
       </main>
@@ -67,7 +74,16 @@ function Live({ session, roomId, radarOnly }: { session: Session; roomId: string
   const self = state?.devices.find((d) => d.id === selfId);
   const isHost = state ? state.hostId === selfId : session.isHost;
 
-  if (!state) return <main className="home"><p className="hint">Connecting...</p></main>;
+  if (!state) {
+    return (
+      <main className="home gate"><div className="glow" aria-hidden="true" />
+        <div className="brand"><span className="wave" aria-hidden="true"><i /><i /><i /><i /><i /></span>SyncWave</div>
+        <SelfStatus session={session} state={{ roomId, serverTime: 0, devices: [], tracks: [], queue: [], playback: { status: 'stopped', trackId: null, startServerTime: null, pausedPositionMs: 0 }, volume: 1, lights: false, live: null, hostId: '' }} />
+        <p className="hint" role="status">{session.status === 'reconnecting' ? 'Reconnecting to the room...' : 'Joining the room...'}</p>
+        <a className="linkbtn center" href="#/" onClick={() => session.leave()}>Cancel</a>
+      </main>
+    );
+  }
 
   if (radarOnly) {
     return (
@@ -83,12 +99,14 @@ function Live({ session, roomId, radarOnly }: { session: Session; roomId: string
     <main className="room">
       <header className="top">
         <div className="brand sm"><span className="wave"><i /><i /><i /><i /><i /></span>SyncWave</div>
-        <button className="roomtag" onClick={() => setShowQr(true)} aria-label="Show QR code">ROOM <b>{roomId}</b> <span className="qrico">QR</span></button>
+        <button className="roomtag" onClick={() => setShowQr(true)} aria-label={`Room ${roomId}. Show QR code and invite link`}>ROOM <b>{roomId}</b> <span className="qrico">QR</span></button>
         {state.live && <span className="livebadge">{state.live.kind === 'share' ? 'LIVE' : 'ANNOUNCING'}</span>}
         <span className="role">{isHost ? 'HOST' : 'GUEST'}</span>
       </header>
 
-      <nav className="tabs" role="tablist">
+      <SelfStatus session={session} state={state} />
+
+      <nav className="tabs" role="tablist" aria-label="Room sections">
         {(['play', 'orch', 'radar', 'space', 'people'] as Tab[]).map((t) => (
           <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>
             {{ play: 'Play', orch: state.orchestra?.enabled ? 'Orchestra ●' : 'Orchestra', radar: 'Radar', space: 'Space', people: `Devices ${state.devices.filter((d) => d.connected).length}` }[t]}
@@ -132,10 +150,10 @@ function Live({ session, roomId, radarOnly }: { session: Session; roomId: string
       </footer>
 
       {showQr && (
-        <div className="modal" onClick={() => setShowQr(false)}>
-          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="modal" onKeyDown={(e) => { if (e.key === 'Escape') setShowQr(false); }} onClick={() => setShowQr(false)}>
+          <div className="sheet" role="dialog" aria-modal="true" aria-label="Invite to room" onClick={(e) => e.stopPropagation()}>
             <QrJoin roomId={roomId} />
-            <button className="btn" onClick={() => setShowQr(false)}>Close</button>
+            <button className="btn" autoFocus onClick={() => setShowQr(false)}>Close</button>
           </div>
         </div>
       )}
@@ -176,11 +194,20 @@ function PlayPane({ session, state, isHost, roomId }: { session: Session; state:
         method: 'POST', body: f,
         headers: { 'x-filename': encodeURIComponent(f.name), 'x-token': token, 'content-type': f.type || 'application/octet-stream' },
       });
-      if (!r.ok) throw new Error(await r.text());
+      if (!r.ok) {
+        const why = await r.text().catch(() => '');
+        if (r.status === 413 || /too large/i.test(why)) throw new Error('That file is too large. The limit is 100 MB; try a smaller or compressed (MP3/M4A) version.');
+        if (r.status === 404) throw new Error('This room no longer exists, so the song could not be added.');
+        if (r.status === 415 || /type|format/i.test(why)) throw new Error('That file type is not supported. Use an MP3, M4A/AAC, WAV or OGG file.');
+        throw new Error(`The server rejected the upload (${r.status}). Try again.`);
+      }
       const { trackId } = await r.json();
       if (isHost && !pb.trackId) session.send({ type: 'setTrack', trackId });
       else session.send({ type: 'queueAdd', trackId });
-    } catch (e) { setErr('Upload failed: ' + (e as Error).message); }
+    } catch (e) {
+      const m = (e as Error).message;
+      setErr(/^(That|This|The) /.test(m) ? m : 'Upload failed. Check your connection and try again.');
+    }
     setUploading(false);
   }
 
@@ -190,6 +217,7 @@ function PlayPane({ session, state, isHost, roomId }: { session: Session; state:
   const liveShare = state.live?.kind === 'share';
   return (
     <>
+      {isHost && <InviteCard roomId={roomId} alone={connected.length < 2} />}
       {isHost && <LivePanel session={session} state={state} />}
       {!isHost && state.live && (
         <p className="hint">{state.live.kind === 'share' ? 'Live audio from the host is playing.' : 'The host is making an announcement. Music is lowered.'}</p>
@@ -224,9 +252,10 @@ function PlayPane({ session, state, isHost, roomId }: { session: Session; state:
 
       <div className="uploadrow">
         <input ref={fileRef} type="file" accept="audio/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} />
-        <button className="btn" onClick={() => fileRef.current?.click()} disabled={uploading}>{uploading ? 'Uploading...' : isHost ? 'Upload a song' : 'Add a song to the queue'}</button>
+        <button className="btn" onClick={() => fileRef.current?.click()} disabled={uploading}>{uploading ? 'Uploading... (large files take a moment)' : isHost ? 'Upload a song' : 'Add a song to the queue'}</button>
       </div>
-      {err && <p className="err">{err}</p>}
+      {err && <p className="err" role="alert">{err} <button className="linkbtn" onClick={() => setErr('')}>Dismiss</button></p>}
+      <p className="hint center temp">Uploads are temporary: files are removed when the room closes or the server restarts. Keep your originals.</p>
 
       <h3>Up next</h3>
       {queued.length === 0 && <p className="hint">Queue is empty. Anyone can add a song and vote.</p>}
@@ -240,6 +269,22 @@ function PlayPane({ session, state, isHost, roomId }: { session: Session; state:
         </>
       )}
     </>
+  );
+}
+
+function InviteCard({ roomId, alone }: { roomId: string; alone: boolean }) {
+  const [open, setOpen] = useState(alone);
+  useEffect(() => { if (alone) setOpen(true); }, [alone]);
+  return (
+    <div className="invite">
+      <div className="invitehead">
+        <div><small>ROOM CODE</small><div className="bigcode" aria-label={roomId.split('').join(' ')}>{roomId}</div></div>
+        <button className="btn sm" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Hide QR' : 'Show QR'}</button>
+      </div>
+      {open && <QrJoin roomId={roomId} compact />}
+      {!open && <InviteButtons roomId={roomId} />}
+      {alone && <p className="hint center">Waiting for others. Have them scan the QR code or enter this code at the home page.</p>}
+    </div>
   );
 }
 
@@ -287,6 +332,7 @@ function TrackRow({ t, idx, session, isHost }: { t: Track; idx?: number; session
 }
 
 function People({ session, state, isHost, self }: { session: Session; state: RoomState; isHost: boolean; self?: Device }) {
+  useTick(500);
   const sorted = useMemo(() => [...state.devices].sort((a, b) => Number(b.connected) - Number(a.connected)), [state.devices]);
   return (
     <>
@@ -296,6 +342,7 @@ function People({ session, state, isHost, self }: { session: Session; state: Roo
         const mine = d.id === self?.id;
         const canTrim = isHost || mine;
         const off = d.offsetMs;
+        const status = deviceStatus(d, state, mine ? (session.loadStatus === 'loading' ? session.engine.loadPct : null) : null);
         const cls = !d.connected ? 'off' : off == null ? 'unk' : Math.abs(off) < 10 ? 'ok' : Math.abs(off) < 25 ? 'warn' : 'bad';
         return (
           <li key={d.id} className={'dev ' + cls}>
@@ -303,13 +350,14 @@ function People({ session, state, isHost, self }: { session: Session; state: Roo
               <span className="led" />
               <b>{d.name}{mine ? ' (you)' : ''}</b>
               {d.isHost && <em>host</em>}
+              <StatusChip status={status} />
               <span className="chan">{d.channel}</span>
               <span className="mono">{off != null ? `${off >= 0 ? '+' : ''}${off.toFixed(1)}ms` : '--'}</span>
               <ScoreBadge score={d.syncScore} />
-              {isHost && !mine && <button className="btn sm danger" onClick={() => session.send({ type: 'kick', deviceId: d.id })}>Kick</button>}
+              {isHost && !mine && <button className="btn sm danger" aria-label={`Kick ${d.name}`} onClick={() => session.send({ type: 'kick', deviceId: d.id })}>Kick</button>}
             </div>
             {canTrim && (
-              <label className="trim"><span>Manual trim</span>
+              <label className="trim"><span>Manual trim{mine ? '' : ' for ' + d.name}</span>
                 <input type="range" min={-300} max={300} step={1} value={d.trimMs}
                   onChange={(e) => session.send(isHost ? { type: 'setTrim', deviceId: d.id, ms: +e.target.value } : { type: 'setTrimSelf', ms: +e.target.value })} />
                 <span className="mono">{d.trimMs > 0 ? '+' : ''}{d.trimMs}ms</span></label>

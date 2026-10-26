@@ -25,11 +25,14 @@ Demo songs (no separator needed): put stems in `server/demo/<slug>/`, see `serve
 
 **Deploy (Render + Hugging Face):** see `docs/deploy.md`. Env vars: `.env.example`. Health check `GET /healthz`; post-deploy check `node scripts/smoke.mjs <url>`.
 
+**Install as an app (PWA):** the service worker only registers on `https://` or `localhost` in a production build (`npm run build && npm start`). Then use the browser's "Install" / "Add to Home Screen". Regenerate icons with `node client/scripts/make-icons.mjs`.
+
 **Stop:** Ctrl+C. If the port is stuck: `lsof -nP -iTCP:3000 -sTCP:LISTEN` then `kill <PID>`.
 
 **Tests:** `npm -w server test` · simulation: `npm run sim -- --devices 5 --duration 600 --jitter 10`
 
 **Common problems**
+- *Old UI after a deploy* — the service worker shows a "new version" toast; tap Refresh (or hard-reload once).
 - *"Stem separation is not configured"* — set `SEPARATOR_URL` and `SEPARATOR_TOKEN` and restart. *"separator rejected the token"* — the token differs from the Space secret. *"separator unreachable"* — a sleeping free Space needs about a minute; press Try again.
 - *Port 3000 in use* — see Stop above, or use another `PORT`.
 - *Tests/build hang reading node_modules* — iCloud evicted files (project is under Desktop). Move the project out of iCloud or reinstall `node_modules`.

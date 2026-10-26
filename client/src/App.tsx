@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import Home from './ui/Home';
 import RoomPage from './ui/Room';
+import { UpdateToast } from './ui/status';
 
 function parse(hash: string): { page: 'home' } | { page: 'room'; roomId: string; radar: boolean } {
   const m = hash.match(/^#\/r\/([A-Za-z0-9]+)(\/radar)?/);
@@ -15,7 +16,17 @@ export default function App() {
     window.addEventListener('hashchange', f);
     return () => window.removeEventListener('hashchange', f);
   }, []);
+  const [updated, setUpdated] = useState(false);
+  useEffect(() => {
+    const f = () => setUpdated(true);
+    window.addEventListener('syncwave:update', f);
+    return () => window.removeEventListener('syncwave:update', f);
+  }, []);
   const r = parse(hash);
-  if (r.page === 'home') return <Home />;
-  return <RoomPage key={r.roomId + (r.radar ? 'r' : '')} roomId={r.roomId} radarOnly={r.radar} />;
+  return (
+    <>
+      {r.page === 'home' ? <Home /> : <RoomPage key={r.roomId + (r.radar ? 'r' : '')} roomId={r.roomId} radarOnly={r.radar} />}
+      <UpdateToast show={updated} />
+    </>
+  );
 }
