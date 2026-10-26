@@ -1,5 +1,6 @@
 import type { Channel, Device, RoomState } from './types';
 import { DUCK_GAIN, LiveScheduler, decodeFrame, pcmToFloat } from './livemath';
+import { analyzeBeatsAsync, nextBeatIndex, type BeatMap } from './beats';
 import { STEMS, diffSources, wantedSources, type SourceName, type StemName } from './orchestra';
 
 // ---------------------------------------------------------------------------
@@ -89,17 +90,33 @@ export function channelMatrix(ch: Channel): [number, number, number, number] {
 export interface BeatOpts {
   windowMs?: number;
   sensitivity?: number; // energy must exceed mean*sensitivity
+  sdK?: number; // ... and mean + sdK*sd
   minGapMs?: number;
   floor?: number;
 }
 
-/** Energy-based beat detector: fires when instantaneous energy exceeds a local average. */
+/** Info passed (second argument) to onBeat callbacks. */
+export interface BeatInfo {
+  strength: number; // 0..1
+  downbeat: boolean;
+  bpm: number | null;
+  index: number;
+}
+export type BeatCallback = (serverTimeMs: number, info?: BeatInfo) => void;
+
+/** Fire a file beat this many ms before it is audible at the latest (then setTimeout for the remainder). */
+export const BEAT_LOOKAHEAD_MS = 30;
+const BEAT_STALE_MS = 60;
+
+/** Real-time fallback detector (live share / announce, or while the offline analysis is pending). */
 export class BeatDetector {
   private hist: { t: number; e: number }[] = [];
   private last = -1e9;
+  /** threshold used by the most recent update() (for strength estimates) */
+  lastThr = 0;
   private o: Required<BeatOpts>;
   constructor(o: BeatOpts = {}) {
-    this.o = { windowMs: 1000, sensitivity: 1.35, minGapMs: 260, floor: 0.08, ...o };
+    this.o = { windowMs: 1000, sensitivity: 1.2, sdK: 1.0, minGapMs: 250, floor: 0.08, ...o };
   }
   reset() {
     this.hist = [];
@@ -116,7 +133,8 @@ export class BeatDetector {
     let v = 0;
     for (const x of h) v += (x.e - mean) ** 2;
     const sd = Math.sqrt(v / h.length);
-    const thr = Math.max(mean * this.o.sensitivity, mean + 1.5 * sd);
+    const thr = Math.max(mean * this.o.sensitivity, mean + this.o.sdK * sd);
+    this.lastThr = thr;
     if (energy > thr && energy > this.o.floor && t - this.last >= this.o.minGapMs) {
       this.last = t;
       return true;
@@ -173,10 +191,18 @@ export class AudioEngine {
   private driftTimer: ReturnType<typeof setInterval> | null = null;
   private beatTimer: ReturnType<typeof setInterval> | null = null;
   private reportCbs = new Set<(r: { driftMs: number }) => void>();
-  private beatCbs = new Set<(t: number) => void>();
+  private beatCbs = new Set<BeatCallback>();
+  // offline beat maps (per track) + the lookahead scheduler state
+  private beatMaps = new Map<string, { src: 'mix' | 'drums'; map: BeatMap }>();
+  private beatAnalyzing = new Map<string, 'mix' | 'drums'>();
+  private beatSync = '';
+  private beatLast = -Infinity; // track-time (s) of the last scheduled beat
+  private beatTimeouts = new Set<ReturnType<typeof setTimeout>>();
+  private rtIndex = 0;
   private endCbs = new Set<(trackId: string) => void>();
-  private detector = new BeatDetector();
-  private freq: Uint8Array<ArrayBuffer> | null = null;
+  private detector = new BeatDetector({ floor: 0.02 });
+  private fdb: Float32Array<ArrayBuffer> | null = null;
+  private prevMag: Float32Array<ArrayBuffer> | null = null;
 
   // live audio (share / announce)
   readonly liveSched = new LiveScheduler(planStart);
@@ -234,7 +260,6 @@ export class AudioEngine {
     this.lowpass.connect(this.master);
     this.master.connect(this.analyser);
     this.analyser.connect(ctx.destination);
-    this.freq = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
     this.setChannel('stereo');
     this.updateVolume();
     ctx.addEventListener('statechange', () => {
@@ -296,6 +321,7 @@ export class AudioEngine {
         throw new Error('decode failed: this browser cannot read that audio format');
       }
       this.buffers.set(trackId, buf);
+      this.analyzeTrack(trackId);
       // keep memory bounded: current + newest 2
       if (this.buffers.size > 3) {
         for (const k of this.buffers.keys()) {
@@ -329,9 +355,44 @@ export class AudioEngine {
       const buf = await this.ctx.decodeAudioData(await res.arrayBuffer());
       for (const k of this.stemBuffers.keys()) if (!k.startsWith(trackId + '|')) this.stemBuffers.delete(k);
       this.stemBuffers.set(key, buf);
+      if (stem === 'drums') this.analyzeTrack(trackId);
     })().finally(() => this.stemLoading.delete(key));
     this.stemLoading.set(key, p);
     return p.then(() => this.reapply());
+  }
+
+  /**
+   * Offline beat analysis, once per track, off the playback path (chunked, yields to the event loop).
+   * Every device analyses the same file so all derive the same beat list. Stems-only tracks use the drums
+   * stem alone (not all devices hold all four stems, a sum would differ between devices).
+   */
+  private analyzeTrack(trackId: string): void {
+    const mix = this.buffers.get(trackId);
+    const drums = this.stemBuffers.get(`${trackId}|drums`);
+    const buf = mix ?? drums;
+    if (!buf) return;
+    const src: 'mix' | 'drums' = mix ? 'mix' : 'drums';
+    const have = this.beatMaps.get(trackId);
+    if (have && (have.src === 'mix' || src === 'drums')) return;
+    if (this.beatAnalyzing.get(trackId) === src || (this.beatAnalyzing.has(trackId) && src === 'drums')) return;
+    this.beatAnalyzing.set(trackId, src);
+    const chans: Float32Array[] = [];
+    for (let c = 0; c < buf.numberOfChannels; c++) chans.push(buf.getChannelData(c));
+    analyzeBeatsAsync(chans, buf.sampleRate)
+      .then((map) => {
+        if (this.beatMaps.get(trackId)?.src === 'mix' && src === 'drums') return;
+        if (this.beatMaps.size >= 6) this.beatMaps.delete(this.beatMaps.keys().next().value as string);
+        if (map.times.length >= 4) this.beatMaps.set(trackId, { src, map });
+      })
+      .catch(() => { /* fall back to the real-time detector */ })
+      .finally(() => {
+        if (this.beatAnalyzing.get(trackId) === src) this.beatAnalyzing.delete(trackId);
+      });
+  }
+
+  /** Beat list of a track once analysed (for tests / UI), else null. */
+  getBeatMap(trackId: string): BeatMap | null {
+    return this.beatMaps.get(trackId)?.map ?? null;
   }
 
   private bufferFor(trackId: string, name: SourceName): AudioBuffer | undefined {
@@ -479,6 +540,16 @@ export class AudioEngine {
       try { s.disconnect(); } catch { /* ignore */ }
     }
     this.liveSources.clear();
+  }
+
+  private liveRxMark = { played: 0, late: 0 };
+  /** Chunks played / dropped-late since the previous call (live receive health). */
+  takeLiveRx(): { played: number; late: number } {
+    const st = this.liveSched.stats, m = this.liveRxMark;
+    if (st.played < m.played || st.late < m.late) { m.played = 0; m.late = 0; } // scheduler was reset
+    const out = { played: st.played - m.played, late: st.late - m.late };
+    m.played = st.played; m.late = st.late;
+    return out;
   }
 
   /** Feed one binary live frame (from the WebSocket, or the host's own capture) into the playout scheduler. */
@@ -664,8 +735,11 @@ export class AudioEngine {
     return () => this.reportCbs.delete(cb);
   }
 
-  /** Fires at (estimated) audio output time. */
-  onBeat(cb: (t: number) => void): () => void {
+  /**
+   * Fires at the instant a beat becomes audible. With an analysed track, beats come from the shared track
+   * timeline so all devices fire together; otherwise from a real-time detector on the output.
+   */
+  onBeat(cb: BeatCallback): () => void {
     this.beatCbs.add(cb);
     return () => this.beatCbs.delete(cb);
   }
@@ -676,26 +750,94 @@ export class AudioEngine {
     return () => this.endCbs.delete(cb);
   }
 
+  private emitBeat(info: BeatInfo) {
+    const t = this.serverNow();
+    for (const cb of this.beatCbs) {
+      try { cb(t, info); } catch { /* a bad listener must not stop the others */ }
+    }
+  }
+
+  private clearBeatTimers() {
+    for (const h of this.beatTimeouts) clearTimeout(h);
+    this.beatTimeouts.clear();
+  }
+
   private beatTick() {
-    if ((!this.playing && !this.liveActive) || !this.analyser || !this.freq || this.beatCbs.size === 0) return;
+    if (this.beatCbs.size === 0 || !this.ctx) { this.beatSync = ''; return; }
+    const entry = this.playing && this.srcs.size > 0 && this.trackId ? this.beatMaps.get(this.trackId) : undefined;
+    if (entry) {
+      this.fileBeatTick(entry.map);
+      return;
+    }
+    if (this.beatSync) { this.beatSync = ''; this.clearBeatTimers(); }
+    this.realtimeBeatTick();
+  }
+
+  /** Lookahead scheduler on the track timeline: position = audible position (render position minus output latency). */
+  private fileBeatTick(map: BeatMap) {
+    const ctx = this.ctx!;
+    if (ctx.currentTime < this.startCtx) { this.beatSync = ''; return; }
+    const audibleMs = this.getPositionMs() - this.outputLatencyMs;
+    const sync = `${this.group}|${this.trackId}|${this.key}`;
+    if (sync !== this.beatSync) {
+      // (re)start, seek, late join, drift re-seek, track change: find the next beat from the position
+      this.beatSync = sync;
+      this.clearBeatTimers();
+      this.beatLast = audibleMs / 1000 - BEAT_STALE_MS / 1000;
+    }
+    const { times, strengths, downbeats, bpm } = map;
+    const rate = this.rate || 1;
+    for (let i = nextBeatIndex(times, this.beatLast + 1e-6); i < times.length; i++) {
+      const dt = (times[i] * 1000 - audibleMs) / rate;
+      if (dt > BEAT_LOOKAHEAD_MS) break;
+      this.beatLast = times[i];
+      if (dt < -BEAT_STALE_MS) continue; // tab was throttled: skip stale beats instead of bursting
+      const info: BeatInfo = { strength: strengths[i], downbeat: downbeats ? downbeats[i] : i % 4 === 0, bpm, index: i };
+      if (dt <= 1) { this.emitBeat(info); continue; }
+      const h = setTimeout(() => {
+        this.beatTimeouts.delete(h);
+        if (this.beatSync === sync) this.emitBeat(info);
+      }, dt);
+      this.beatTimeouts.add(h);
+    }
+  }
+
+  /** Fallback: bass power (linear, <200 Hz) + spectral flux from the output analyser. */
+  private realtimeBeatTick() {
+    if ((!this.playing && !this.liveActive) || !this.analyser) return;
     if (!this.liveActive && this.ctx && this.ctx.currentTime < this.startCtx) return;
-    this.analyser.getByteFrequencyData(this.freq);
-    // bass energy: bins up to ~200 Hz
-    const binHz = (this.ctx!.sampleRate / 2) / this.freq.length;
-    const end = Math.max(2, Math.min(this.freq.length, Math.ceil(200 / binHz)));
-    let sum = 0;
-    for (let i = 1; i < end; i++) sum += this.freq[i] / 255;
-    const energy = sum / (end - 1);
-    const now = performance.now();
-    if (this.detector.update(energy, now)) {
-      // analyser sees audio before it is audible; delay by output latency
-      const delay = this.outputLatencyMs;
-      const fire = () => {
-        const t = this.serverNow();
-        for (const cb of this.beatCbs) cb(t);
+    const n = this.analyser.frequencyBinCount;
+    if (!this.fdb || this.fdb.length !== n) {
+      this.fdb = new Float32Array(new ArrayBuffer(n * 4));
+      this.prevMag = new Float32Array(new ArrayBuffer(n * 4));
+    }
+    const fdb = this.fdb, prev = this.prevMag!;
+    this.analyser.getFloatFrequencyData(fdb);
+    const binHz = this.ctx!.sampleRate / 2 / n;
+    const lowEnd = Math.max(2, Math.min(n, Math.ceil(200 / binHz)));
+    const fluxEnd = Math.max(lowEnd + 1, Math.min(n, Math.ceil(5000 / binHz)));
+    let low = 0, flux = 0;
+    for (let i = 1; i < fluxEnd; i++) {
+      const db = fdb[i];
+      const mag = db > -150 ? Math.pow(10, db / 20) : 0; // dB -> linear amplitude
+      if (i < lowEnd) low += mag * mag;
+      const d = mag - prev[i];
+      if (d > 0) flux += d;
+      prev[i] = mag;
+    }
+    // analyser magnitudes are per-bin amplitudes relative to full scale (fft normalised); sqrt of summed power
+    const energy = Math.sqrt(low) + 0.5 * flux;
+    if (this.detector.update(energy, performance.now())) {
+      const thr = Math.max(1e-6, this.detector.lastThr);
+      const info: BeatInfo = {
+        strength: Math.max(0.3, Math.min(1, 0.3 + (energy / thr - 1) * 1.2)),
+        downbeat: this.rtIndex % 4 === 0,
+        bpm: null,
+        index: this.rtIndex++,
       };
-      if (delay > 2) setTimeout(fire, delay);
-      else fire();
+      const delay = this.outputLatencyMs; // analyser sees audio before it is audible
+      if (delay > 2) setTimeout(() => this.emitBeat(info), delay);
+      else this.emitBeat(info);
     }
   }
 
@@ -703,6 +845,7 @@ export class AudioEngine {
   dispose(): void {
     this.stopSources();
     this.stopLiveSources();
+    this.clearBeatTimers();
     this.playing = false;
     if (this.driftTimer) clearInterval(this.driftTimer);
     if (this.beatTimer) clearInterval(this.beatTimer);
