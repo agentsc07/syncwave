@@ -54,3 +54,10 @@
 - Final verification: 9 server test files pass; production build ok; scripts/smoke.mjs PASS against local prod server (port 3700); /api/demo lists 2 songs.
 - Secret/junk scan: no secrets tracked (pattern grep over tracked files), only .env.example placeholders, no personal paths/emails in files, 100 files / 9.4 MB. Moved an iCloud duplicate `node_modules 2` into _holding/ and gitignored `* 2`.
 - OPEN before going public: all 15+ commits are authored `Sai-Charan-CV <saicharancv@iisc.ac.in>` (git config). Not rewritten without the user's say-so.
+
+### 2026-10-26 — Feedback round after first real use
+- User report: Orchestra not well developed; share-tab works; calibration great; Announce does not work; lights flashed once in a long time.
+- Orchestra: marked 'coming soon' in the UI (flag ORCHESTRA_AVAILABLE=false in client/src/ui/Orchestra.tsx; code kept). Demo songs moved from the Orchestra tab to the Play tab (host picker, every device plays the full song). README/report/demo-script updated; demo script no longer uses Orchestra.
+- Announce root cause (reproduced in headless Chromium): 250 ms playout delay is below real network+clock+output latency, so receivers dropped nearly every chunk as late (0 of ~245 scheduled with +200 ms). Fix: default 700 ms (300-2000), server raises it 300 ms when >=15% of chunks are reported late (liveRx), host mic level meter + 'X of N hearing it' status, press-and-hold to talk. Verified with fake mic only.
+- Lights root cause: per-device real-time detector on dB-scaled analyser data almost never fired and devices were not synchronized. Fix: offline beat/tempo analysis of the decoded song (client/src/lib/beats.ts), beats fired from the shared timeline minus output latency so all devices flash together; improved real-time fallback for live audio; new LightShow with downbeat accents, soft mode. Verified: 120 BPM synthetic track 56/56 kicks matched within 2.5 ms; demo songs flash end to end (BPM estimates 157 and 88 from the drums stem are octave-ambiguous; label is cosmetic). Not verified on real speakers/phones.
+- All 10 server test files pass; production build ok.

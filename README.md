@@ -25,7 +25,7 @@ One phone speaker cannot fill a room, Bluetooth speakers play one at a time, and
 - **Synced playback.** Every device starts the same pre-loaded audio at the same instant and corrects drift while it plays.
 - **Coming soon: Orchestra mode.** AI stem separation (Demucs htdemucs: vocals / drums / bass / other) so each phone plays a different part. The code exists (`separator/`, server and client) but the experience is not polished, so it is switched off in the UI for now.
 - **AI/data feature B: acoustic auto-calibration.** Each device plays a chirp in turn; the host's microphone records; cross-correlation measures each device's real acoustic delay and sets its trim automatically. Each device gets a 0–100 sync score. This replaces dragging a trim slider for a Bluetooth speaker.
-- Also: sync radar (live offset per device), spatial mode (left/right/centre channels), beat-synced light show, live tab-audio share, mic announce, guest queue with voting, host handoff, late join at the exact current position.
+- Also: sync radar (live offset per device), spatial mode (left/right/centre channels), song-synced light show (the beats and tempo are analysed from the song file once, so every screen flashes on the same beat, with a stronger flash on downbeats), live tab-audio share, mic announce, guest queue with voting, host handoff, late join at the exact current position.
 
 ## How it works
 
@@ -129,7 +129,7 @@ iPhones may mute web audio in silent mode (flip the switch off). Keep screens on
 
 ### Live share and Announce
 
-Host-only, in the Play tab. **Share tab/system audio** (desktop Chrome/Edge) captures a tab or the system via `getDisplayMedia` (the video is discarded; choose a tab and tick "Share tab audio"), and **Announce (mic)** captures the microphone (works on phones too). Audio is sent in ~20 ms chunks through the server, each stamped with server time, and every device (including the host) plays it `delay` later: 1.5 s by default for share (slider 0.8–3 s, which also absorbs Wi-Fi jitter) and about 0.25 s for announce. While announcing, the music is ducked to 25 % on every device. Starting a share stops file playback. Share sends about 1.5 Mbit/s per receiver.
+Host-only, in the Play tab. **Share tab/system audio** (desktop Chrome/Edge) captures a tab or the system via `getDisplayMedia` (the video is discarded; choose a tab and tick "Share tab audio"), and **Announce (mic)** captures the microphone (works on phones too). Audio is sent in ~20 ms chunks through the server, each stamped with server time, and every device (including the host) plays it `delay` later: 1.5 s by default for share (slider 0.8–3 s, which also absorbs Wi-Fi jitter) and 0.7 s for announce (the server raises it automatically if receivers report late chunks; press and hold to talk). While announcing, the music is ducked to 25 % on every device. Starting a share stops file playback. Share sends about 1.5 Mbit/s per receiver.
 
 `getUserMedia` / `getDisplayMedia` only work on secure origins. `http://localhost:3000` is fine; **phones opening `http://<LAN-IP>:3000` cannot use the mic or tab capture** (they can still listen). To use the host controls from a phone on a LAN, serve over HTTPS:
 
